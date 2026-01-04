@@ -1,0 +1,297 @@
+//
+//  DirectDownloadInstaller.swift
+//  MacDeploymentToolkit
+//
+//  Handles direct download installations (DMG, PKG, ZIP)
+//
+
+import Foundation
+
+/// Handles application installation via direct downloads
+class DirectDownloadInstaller {
+    
+    // MARK: - Properties
+    
+    private let fileManager = FileManager.default
+    private let tempDirectory: URL
+    
+    init() {
+        tempDirectory = fileManager.temporaryDirectory.appendingPathComponent("MacDeploymentToolkit")
+        try? fileManager.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+    }
+    
+    // MARK: - Public Methods
+    
+    /// Install an application from a direct download URL
+    func install(name: String, url: String, format: InstallMethod.InstallerFormat) async throws {
+        guard let downloadUrl = URL(string: url) else {
+            throw DirectDownloadError.invalidUrl(url)
+        }
+        
+        // Download the installer
+        let localFile = try await downloadFile(from: downloadUrl, name: name, format: format)
+        
+        defer {
+            // Cleanup downloaded file
+            try? fileManager.removeItem(at: localFile)
+        }
+        
+        // Install based on format
+        switch format {
+        case .dmg:
+            try await installFromDMG(localFile, appName: name)
+        case .pkg:
+            try await installFromPKG(localFile)
+        case .zip:
+            try await installFromZIP(localFile, appName: name)
+        case .app:
+            try await installAppBundle(localFile, appName: name)
+        }
+    }
+    
+    // MARK: - Download
+    
+    private func downloadFile(from url: URL, name: String, format: InstallMethod.InstallerFormat) async throws -> URL {
+        let fileExtension = format.rawValue
+        let localUrl = tempDirectory.appendingPathComponent("\(name).\(fileExtension)")
+        
+        // Remove existing file if present
+        try? fileManager.removeItem(at: localUrl)
+        
+        let (tempUrl, response) = try await URLSession.shared.download(from: url)
+        
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            throw DirectDownloadError.downloadFailed(name)
+        }
+        
+        try fileManager.moveItem(at: tempUrl, to: localUrl)
+        return localUrl
+    }
+    
+    // MARK: - DMG Installation
+    
+    private func installFromDMG(_ dmgPath: URL, appName: String) async throws {
+        // Mount the DMG
+        let mountPoint = try await mountDMG(dmgPath)
+        
+        defer {
+            // Unmount when done
+            Task {
+                try? await unmountDMG(mountPoint)
+            }
+        }
+        
+        // Find .app in mounted volume
+        let appBundle = try findAppBundle(in: mountPoint, name: appName)
+        
+        // Copy to /Applications
+        let destination = URL(fileURLWithPath: "/Applications").appendingPathComponent(appBundle.lastPathComponent)
+        
+        // Remove existing app if present
+        if fileManager.fileExists(atPath: destination.path) {
+            try fileManager.removeItem(at: destination)
+        }
+        
+        try fileManager.copyItem(at: appBundle, to: destination)
+    }
+    
+    private func mountDMG(_ dmgPath: URL) async throws -> URL {
+        let result = try await runShellCommand("hdiutil attach '\(dmgPath.path)' -nobrowse -quiet")
+        
+        if result.exitCode != 0 {
+            throw DirectDownloadError.mountFailed(dmgPath.lastPathComponent, result.error)
+        }
+        
+        // Parse mount point from output
+        let lines = result.output.components(separatedBy: "\n")
+        for line in lines.reversed() {
+            let components = line.components(separatedBy: "\t")
+            if components.count >= 3 {
+                let mountPath = components.last?.trimmingCharacters(in: .whitespaces) ?? ""
+                if !mountPath.isEmpty && mountPath.hasPrefix("/Volumes/") {
+                    return URL(fileURLWithPath: mountPath)
+                }
+            }
+        }
+        
+        throw DirectDownloadError.mountFailed(dmgPath.lastPathComponent, "Could not determine mount point")
+    }
+    
+    private func unmountDMG(_ mountPoint: URL) async throws {
+        _ = try await runShellCommand("hdiutil detach '\(mountPoint.path)' -quiet")
+    }
+    
+    private func findAppBundle(in directory: URL, name: String) throws -> URL {
+        let contents = try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        
+        // Look for .app bundle
+        if let appBundle = contents.first(where: { $0.pathExtension == "app" }) {
+            return appBundle
+        }
+        
+        // Look for installer .pkg
+        if let pkgInstaller = contents.first(where: { $0.pathExtension == "pkg" }) {
+            throw DirectDownloadError.foundPKGInDMG(pkgInstaller)
+        }
+        
+        throw DirectDownloadError.appNotFoundInDMG(name)
+    }
+    
+    // MARK: - PKG Installation
+    
+    private func installFromPKG(_ pkgPath: URL) async throws {
+        // PKG installation requires elevated privileges
+        let command = "sudo installer -pkg '\(pkgPath.path)' -target /"
+        let result = try await runShellCommandWithElevation(command)
+        
+        if result.exitCode != 0 {
+            throw DirectDownloadError.pkgInstallFailed(pkgPath.lastPathComponent, result.error)
+        }
+    }
+    
+    // MARK: - ZIP Installation
+    
+    private func installFromZIP(_ zipPath: URL, appName: String) async throws {
+        let extractDir = tempDirectory.appendingPathComponent("extract_\(appName)")
+        
+        // Create extraction directory
+        try? fileManager.removeItem(at: extractDir)
+        try fileManager.createDirectory(at: extractDir, withIntermediateDirectories: true)
+        
+        defer {
+            try? fileManager.removeItem(at: extractDir)
+        }
+        
+        // Extract ZIP
+        let result = try await runShellCommand("unzip -q '\(zipPath.path)' -d '\(extractDir.path)'")
+        
+        if result.exitCode != 0 {
+            throw DirectDownloadError.extractFailed(zipPath.lastPathComponent, result.error)
+        }
+        
+        // Find and install .app bundle
+        let appBundle = try findAppBundle(in: extractDir, name: appName)
+        let destination = URL(fileURLWithPath: "/Applications").appendingPathComponent(appBundle.lastPathComponent)
+        
+        if fileManager.fileExists(atPath: destination.path) {
+            try fileManager.removeItem(at: destination)
+        }
+        
+        try fileManager.copyItem(at: appBundle, to: destination)
+    }
+    
+    // MARK: - App Bundle Installation
+    
+    private func installAppBundle(_ appPath: URL, appName: String) async throws {
+        let destination = URL(fileURLWithPath: "/Applications").appendingPathComponent("\(appName).app")
+        
+        if fileManager.fileExists(atPath: destination.path) {
+            try fileManager.removeItem(at: destination)
+        }
+        
+        try fileManager.copyItem(at: appPath, to: destination)
+    }
+    
+    // MARK: - Shell Command Execution
+    
+    private func runShellCommand(_ command: String) async throws -> ShellResult {
+        return try await withCheckedThrowingContinuation { continuation in
+            let process = Process()
+            let outputPipe = Pipe()
+            let errorPipe = Pipe()
+            
+            process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            process.arguments = ["-c", command]
+            process.standardOutput = outputPipe
+            process.standardError = errorPipe
+            
+            do {
+                try process.run()
+                process.waitUntilExit()
+                
+                let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+                let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+                
+                let output = String(data: outputData, encoding: .utf8) ?? ""
+                let error = String(data: errorData, encoding: .utf8) ?? ""
+                
+                continuation.resume(returning: ShellResult(
+                    output: output,
+                    error: error,
+                    exitCode: process.terminationStatus
+                ))
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
+    }
+    
+    private func runShellCommandWithElevation(_ command: String) async throws -> ShellResult {
+        // Use osascript to run command with administrator privileges
+        let script = """
+        do shell script "\(command.replacingOccurrences(of: "\"", with: "\\\""))" with administrator privileges
+        """
+        
+        return try await withCheckedThrowingContinuation { continuation in
+            let process = Process()
+            let outputPipe = Pipe()
+            let errorPipe = Pipe()
+            
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            process.arguments = ["-e", script]
+            process.standardOutput = outputPipe
+            process.standardError = errorPipe
+            
+            do {
+                try process.run()
+                process.waitUntilExit()
+                
+                let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+                let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+                
+                let output = String(data: outputData, encoding: .utf8) ?? ""
+                let error = String(data: errorData, encoding: .utf8) ?? ""
+                
+                continuation.resume(returning: ShellResult(
+                    output: output,
+                    error: error,
+                    exitCode: process.terminationStatus
+                ))
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
+    }
+}
+
+// MARK: - Errors
+
+enum DirectDownloadError: LocalizedError {
+    case invalidUrl(String)
+    case downloadFailed(String)
+    case mountFailed(String, String)
+    case appNotFoundInDMG(String)
+    case foundPKGInDMG(URL)
+    case pkgInstallFailed(String, String)
+    case extractFailed(String, String)
+    
+    var errorDescription: String? {
+        switch self {
+        case .invalidUrl(let url):
+            return "Invalid download URL: \(url)"
+        case .downloadFailed(let name):
+            return "Failed to download \(name)"
+        case .mountFailed(let name, let error):
+            return "Failed to mount \(name): \(error)"
+        case .appNotFoundInDMG(let name):
+            return "Could not find \(name).app in disk image"
+        case .foundPKGInDMG(let url):
+            return "Found PKG installer in DMG: \(url.lastPathComponent)"
+        case .pkgInstallFailed(let name, let error):
+            return "Failed to install \(name): \(error)"
+        case .extractFailed(let name, let error):
+            return "Failed to extract \(name): \(error)"
+        }
+    }
+}
