@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:MACDeploymentToolkit}/MacDeploymentToolkit",
+            "name": "Debug MacDeploymentToolkit (MacDeploymentToolkit)",
+            "target": "MacDeploymentToolkit",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug MacDeploymentToolkit (MacDeploymentToolkit)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:MACDeploymentToolkit}/MacDeploymentToolkit",
+            "name": "Release MacDeploymentToolkit (MacDeploymentToolkit)",
+            "target": "MacDeploymentToolkit",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release MacDeploymentToolkit (MacDeploymentToolkit)"
+        }
+    ]
+}
