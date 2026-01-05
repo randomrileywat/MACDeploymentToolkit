@@ -33,7 +33,7 @@ struct ContentView: View {
                 selectionView
             }
         }
-        .frame(width: 690, height: 740)
+        .frame(width: 650, height: 620)
         .background(Color(NSColor.windowBackgroundColor))
     }
     
@@ -65,8 +65,8 @@ struct ContentView: View {
                     .foregroundColor(.secondary)
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 15)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
     }
     
     // MARK: - Selection View (Pre-Deployment)
@@ -75,16 +75,16 @@ struct ContentView: View {
         VStack(spacing: 0) {
             // Application Tree View
             applicationTreeView
-                .frame(height: 450)
+                .frame(maxHeight: .infinity)
             
             Divider()
-                .padding(.horizontal, 20)
+                .padding(.horizontal, 16)
             
             // Mac Standardization Section
             macStandardizationSection
             
             Divider()
-                .padding(.horizontal, 20)
+                .padding(.horizontal, 16)
             
             // Bottom Bar with Status and Deploy Button
             bottomBar
@@ -100,13 +100,13 @@ struct ContentView: View {
                     categorySection(for: category)
                 }
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 10)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
         }
         .background(Color(NSColor.textBackgroundColor))
         .cornerRadius(8)
-        .padding(.horizontal, 20)
-        .padding(.top, 10)
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
     }
     
     private func categorySection(for category: ApplicationCategory) -> some View {
@@ -228,7 +228,7 @@ struct ContentView: View {
     // MARK: - Mac Standardization Section
     
     private var macStandardizationSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             Toggle(isOn: $macStandardizationEnabled) {
                 Text("Mac Standardization (Dock, Theme, Power Settings, Wallpaper)")
                     .font(.system(size: 11))
@@ -236,28 +236,30 @@ struct ContentView: View {
             .toggleStyle(.checkbox)
             
             if macStandardizationEnabled {
-                HStack(spacing: 20) {
+                HStack(spacing: 16) {
                     // Computer Name Input
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 2) {
                         Text("Computer Name (for wallpaper):")
                             .font(.system(size: 10))
                             .foregroundColor(.secondary)
                         
                         TextField("Computer Name", text: $computerName)
                             .textFieldStyle(.roundedBorder)
-                            .frame(width: 200)
+                            .frame(width: 180)
+                            .font(.system(size: 11))
                     }
                     
                     // Custom Icon Path
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Custom Icon (optional):")
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Custom Logo (optional):")
                             .font(.system(size: 10))
                             .foregroundColor(.secondary)
                         
-                        HStack {
+                        HStack(spacing: 4) {
                             TextField("Select an image...", text: $customIconPath)
                                 .textFieldStyle(.roundedBorder)
                                 .frame(width: 180)
+                                .font(.system(size: 11))
                             
                             Button("Browse") {
                                 browseForIcon()
@@ -266,11 +268,12 @@ struct ContentView: View {
                         }
                     }
                 }
-                .padding(.leading, 20)
+                .padding(.leading, 18)
+                .padding(.top, 2)
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 15)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
     }
     
     private func browseForIcon() {
@@ -297,8 +300,8 @@ struct ContentView: View {
             // Deploy Button
             deployButton
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 15)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
     }
     
     private var statusLabel: some View {
@@ -352,7 +355,7 @@ struct ContentView: View {
         VStack(spacing: 0) {
             // Summary Panel
             deploymentSummaryPanel
-                .frame(height: 420)
+                .frame(height: 320)
             
             // Progress Bar
             if deploymentManager.isDeploying {
@@ -384,11 +387,11 @@ struct ContentView: View {
                 }
             }
         }
-        .padding(15)
+        .padding(12)
         .background(Color(NSColor.textBackgroundColor))
         .cornerRadius(8)
-        .padding(.horizontal, 20)
-        .padding(.top, 10)
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
     }
     
     private func taskRow(for task: DeploymentTask) -> some View {
@@ -446,9 +449,9 @@ struct ContentView: View {
             .background(Color(red: 0.12, green: 0.12, blue: 0.12))
             .cornerRadius(6)
         }
-        .padding(.horizontal, 20)
-        .padding(.bottom, 15)
-        .frame(height: 200)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 10)
+        .frame(height: 180)
     }
 }
 

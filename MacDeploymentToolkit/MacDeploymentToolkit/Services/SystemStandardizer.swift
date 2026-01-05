@@ -75,18 +75,17 @@ class SystemStandardizer {
     }
     
     private func configureDockApps() async throws {
-        // Clear existing persistent apps
+        // Clear existing persistent apps (this removes Safari and everything else)
         try await runDefaultsCommand("com.apple.dock", key: "persistent-apps", value: "()", type: "array")
         
         // Add Finder (always first)
         try await addAppToDock(path: "/System/Library/CoreServices/Finder.app")
         
-        // Add Safari or Chrome if available
+        // Add Chrome if installed, otherwise skip browser (Safari not added)
         if fileManager.fileExists(atPath: "/Applications/Google Chrome.app") {
             try await addAppToDock(path: "/Applications/Google Chrome.app")
-        } else {
-            try await addAppToDock(path: "/Applications/Safari.app")
         }
+        // Note: Safari is intentionally NOT added to the dock
         
         // Add Terminal
         try await addAppToDock(path: "/Applications/Utilities/Terminal.app")

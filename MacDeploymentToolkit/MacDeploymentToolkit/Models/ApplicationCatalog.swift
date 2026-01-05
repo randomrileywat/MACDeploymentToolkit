@@ -18,10 +18,10 @@ struct ApplicationCatalog {
             ApplicationDefinition(
                 name: "Dante Controller",
                 category: .audio,
-                installMethod: .directDownload(format: .dmg),
-                packageId: nil,
-                downloadUrl: "https://my.audinate.com/support/downloads/dante-controller",
-                version: "4.16",
+                installMethod: .homebrew(type: .cask),
+                packageId: "dante-controller",
+                downloadUrl: nil,
+                version: nil,
                 macOsEquivalent: nil
             ),
             ApplicationDefinition(
@@ -63,11 +63,38 @@ struct ApplicationCatalog {
             ApplicationDefinition(
                 name: "Waves Central",
                 category: .audio,
-                installMethod: .directDownload(format: .dmg),
-                packageId: nil,
-                downloadUrl: "https://www.waves.com/downloads/central",
+                installMethod: .homebrew(type: .cask),
+                packageId: "waves-central",
+                downloadUrl: nil,
                 version: nil,
                 macOsEquivalent: nil
+            ),
+            ApplicationDefinition(
+                name: "Araneo",
+                category: .audio,
+                installMethod: .directDownload(format: .dmg),
+                packageId: nil,
+                downloadUrl: nil, // TODO: Add download URL
+                version: nil,
+                macOsEquivalent: "d&b audiotechnik ArrayProcessing"
+            ),
+            ApplicationDefinition(
+                name: "LA Network Manager",
+                category: .audio,
+                installMethod: .directDownload(format: .dmg),
+                packageId: nil,
+                downloadUrl: nil, // TODO: Add download URL
+                version: nil,
+                macOsEquivalent: "L-Acoustics network management"
+            ),
+            ApplicationDefinition(
+                name: "d&b R1",
+                category: .audio,
+                installMethod: .directDownload(format: .dmg),
+                packageId: nil,
+                downloadUrl: nil, // TODO: Add download URL
+                version: nil,
+                macOsEquivalent: "d&b Remote control"
             )
         ],
         
@@ -101,22 +128,22 @@ struct ApplicationCatalog {
                 macOsEquivalent: nil
             ),
             ApplicationDefinition(
-                name: "OBS Studio",
+                name: "ProPresenter",
                 category: .video,
                 installMethod: .homebrew(type: .cask),
-                packageId: "obs",
+                packageId: "propresenter",
                 downloadUrl: nil,
                 version: nil,
-                macOsEquivalent: "Alternative for video production"
+                macOsEquivalent: "Presentation/worship software"
             ),
             ApplicationDefinition(
-                name: "VLC",
+                name: "Resolume Arena",
                 category: .video,
                 installMethod: .homebrew(type: .cask),
-                packageId: "vlc",
+                packageId: "resolume-arena",
                 downloadUrl: nil,
                 version: nil,
-                macOsEquivalent: nil
+                macOsEquivalent: "Media server/VJ software"
             )
         ],
         
@@ -130,15 +157,6 @@ struct ApplicationCatalog {
                 downloadUrl: "https://github.com/docsteer/sacnview/releases",
                 version: "2.1.3",
                 macOsEquivalent: nil
-            ),
-            ApplicationDefinition(
-                name: "QLC+",
-                category: .lighting,
-                installMethod: .homebrew(type: .cask),
-                packageId: "qlcplus",
-                downloadUrl: nil,
-                version: nil,
-                macOsEquivalent: "Open source lighting control"
             )
         ],
         
@@ -147,9 +165,9 @@ struct ApplicationCatalog {
             ApplicationDefinition(
                 name: "Angry IP Scanner",
                 category: .networking,
-                installMethod: .homebrew(type: .cask),
-                packageId: "angry-ip-scanner",
-                downloadUrl: nil,
+                installMethod: .directDownload(format: .zip),
+                packageId: nil,
+                downloadUrl: "https://angryip.org/download/",
                 version: nil,
                 macOsEquivalent: "macOS alternative to Advanced IP Scanner"
             ),
@@ -157,7 +175,7 @@ struct ApplicationCatalog {
                 name: "Wireshark",
                 category: .networking,
                 installMethod: .homebrew(type: .cask),
-                packageId: "wireshark",
+                packageId: "wireshark-app",
                 downloadUrl: nil,
                 version: nil,
                 macOsEquivalent: nil
@@ -179,28 +197,28 @@ struct ApplicationCatalog {
                 downloadUrl: nil, // Will use Supabase if available for Mac
                 version: "2.2.0",
                 macOsEquivalent: nil
+            ),
+            ApplicationDefinition(
+                name: "Luminet Monitor",
+                category: .networking,
+                installMethod: .directDownload(format: .dmg),
+                packageId: nil,
+                downloadUrl: nil, // TODO: Add download URL
+                version: nil,
+                macOsEquivalent: "Luminex network monitoring"
             )
         ],
         
         // MARK: - Control Applications
         .control: [
             ApplicationDefinition(
-                name: "Q-SYS Designer",
+                name: "Companion",
                 category: .control,
-                installMethod: .directDownload(format: .dmg),
-                packageId: nil,
-                downloadUrl: nil, // Will use Supabase
-                version: "10.1.0",
-                macOsEquivalent: nil
-            ),
-            ApplicationDefinition(
-                name: "Q-SYS UCI Viewer",
-                category: .control,
-                installMethod: .directDownload(format: .dmg),
-                packageId: nil,
-                downloadUrl: nil, // Will use Supabase
-                version: "10.1.0",
-                macOsEquivalent: nil
+                installMethod: .homebrew(type: .cask),
+                packageId: "companion",
+                downloadUrl: nil,
+                version: nil,
+                macOsEquivalent: "Bitfocus stream deck/control"
             )
         ],
         
@@ -223,24 +241,6 @@ struct ApplicationCatalog {
                 downloadUrl: nil,
                 version: nil,
                 macOsEquivalent: nil
-            ),
-            ApplicationDefinition(
-                name: "Visual Studio Code",
-                category: .system,
-                installMethod: .homebrew(type: .cask),
-                packageId: "visual-studio-code",
-                downloadUrl: nil,
-                version: nil,
-                macOsEquivalent: nil
-            ),
-            ApplicationDefinition(
-                name: "Rectangle",
-                category: .system,
-                installMethod: .homebrew(type: .cask),
-                packageId: "rectangle",
-                downloadUrl: nil,
-                version: nil,
-                macOsEquivalent: "Window management utility"
             )
         ],
         
@@ -251,7 +251,7 @@ struct ApplicationCatalog {
                 category: .testContent,
                 installMethod: .custom(handler: "audiotestcontent"),
                 packageId: nil,
-                downloadUrl: nil, // Will use Supabase
+                downloadUrl: "https://incdoepqrbwaagatikgb.supabase.co/storage/v1/object/sign/installers/Video%20Test%20Content/Audio%20Test%20Content.zip?token=eyJraWQiOiJzdG9yYWdlLXVybC1zaWduaW5nLWtleV9iMThlMzFjNi05NmI2LTRhZjItOTI1Mi1iYzA5NWM1NTEwNmQiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJpbnN0YWxsZXJzL1ZpZGVvIFRlc3QgQ29udGVudC9BdWRpbyBUZXN0IENvbnRlbnQuemlwIiwiaWF0IjoxNzY3MzI5MDExLCJleHAiOjQ4ODkzOTMwMTF9.nIFHyBTsp5_4RObSkHVMZpK0yxF_GkNiImXmJa3Nyo4",
                 version: nil,
                 macOsEquivalent: nil
             ),
@@ -260,7 +260,7 @@ struct ApplicationCatalog {
                 category: .testContent,
                 installMethod: .custom(handler: "videotestcontent"),
                 packageId: nil,
-                downloadUrl: nil, // Will use Supabase
+                downloadUrl: "https://incdoepqrbwaagatikgb.supabase.co/storage/v1/object/sign/installers/Video%20Test%20Content/Video%20Test%20Content.zip?token=eyJraWQiOiJzdG9yYWdlLXVybC1zaWduaW5nLWtleV9iMThlMzFjNi05NmI2LTRhZjItOTI1Mi1iYzA5NWM1NTEwNmQiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJpbnN0YWxsZXJzL1ZpZGVvIFRlc3QgQ29udGVudC9WaWRlbyBUZXN0IENvbnRlbnQuemlwIiwiaWF0IjoxNzY3MzI5MDM1LCJleHAiOjQ4ODkzOTMwMzV9.k4fC53e3-adF5rhlPCyl8de4dbINxRj7OWGN9mEZopg",
                 version: nil,
                 macOsEquivalent: nil
             )

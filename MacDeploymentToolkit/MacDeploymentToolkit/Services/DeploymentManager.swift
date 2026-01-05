@@ -47,6 +47,9 @@ class DeploymentManager: ObservableObject {
     private let directDownloadInstaller = DirectDownloadInstaller()
     private let systemStandardizer = SystemStandardizer()
     
+    // Admin privileges
+    private var sudoKeepaliveProcess: Process?
+    
     // Supabase configuration
     private let supabaseUrl = "https://incdoepqrbwaagatikgb.supabase.co"
     private let supabaseServiceKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImluY2RvZXBxcmJ3YWFnYXRpa2diIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2MjkwNzA0OSwiZXhwIjoyMDc4NDgzMDQ5fQ.5qjYJq7OGWAdBIVZqzpRE71aJEEOvbko9m3VDVJuQQA"
@@ -104,6 +107,20 @@ class DeploymentManager: ObservableObject {
         
         var successCount = 0
         var failCount = 0
+        
+        // Step 0: Request admin privileges once at the start (for ALL deployments)
+        // This covers: Homebrew installation, PKG installers, system settings, etc.
+        log("Requesting administrator privileges...", color: .logYellow)
+        log("(You will only need to enter your password once)", color: .logGray)
+        currentStatus = "Requesting admin privileges..."
+        
+        let adminGranted = await requestAdminPrivileges()
+        if adminGranted {
+            log("✓ Administrator privileges granted", color: .logGreen)
+        } else {
+            log("⚠ Administrator privileges not granted - some features may fail", color: .logOrange)
+        }
+        log("")
         
         // Step 1: Mac Standardization
         if macStandardization {
@@ -199,6 +216,10 @@ class DeploymentManager: ObservableObject {
         let duration = Date().timeIntervalSince(startTime)
         stopFriendlyMessages()
         
+        // Stop the sudo keepalive process and release credentials
+        stopSudoKeepalive()
+        log("✓ Admin privileges released", color: .logGray)
+        
         log("=== Deployment Complete ===", color: .logCyan)
         log("Duration: \(formatDuration(duration))", color: .logGray)
         log("Results: \(successCount) succeeded, \(failCount) failed", color: successCount > 0 ? .logGreen : .logRed)
@@ -207,6 +228,63 @@ class DeploymentManager: ObservableObject {
         currentStatus = "Deployment complete"
         
         // Note: Keep isDeploying true so the UI stays on the deployment view
+    }
+    
+    // MARK: - Admin Privileges
+    
+    /// Request admin privileges once at the start - caches sudo credentials
+    /// User enters password once, then all subsequent sudo commands use cached credentials
+    private func requestAdminPrivileges() async -> Bool {
+        // Use osascript to prompt for admin credentials and cache them
+        let script = """
+        do shell script "sudo -v" with administrator privileges
+        """
+        
+        let process = Process()
+        let outputPipe = Pipe()
+        let errorPipe = Pipe()
+        
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", script]
+        process.standardOutput = outputPipe
+        process.standardError = errorPipe
+        
+        do {
+            try process.run()
+            process.waitUntilExit()
+            
+            if process.terminationStatus == 0 {
+                // Start a background process to keep sudo alive
+                startSudoKeepalive()
+                return true
+            }
+        } catch {
+            // User cancelled or error occurred
+        }
+        
+        return false
+    }
+    
+    /// Starts a background process that keeps sudo credentials alive
+    private func startSudoKeepalive() {
+        sudoKeepaliveProcess = Process()
+        sudoKeepaliveProcess?.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        // Refresh sudo every 4 minutes (sudo timeout is usually 5 minutes)
+        sudoKeepaliveProcess?.arguments = ["-c", "while true; do sudo -v; sleep 240; done"]
+        
+        try? sudoKeepaliveProcess?.run()
+    }
+    
+    /// Stop the sudo keepalive process when deployment completes
+    private func stopSudoKeepalive() {
+        sudoKeepaliveProcess?.terminate()
+        sudoKeepaliveProcess = nil
+        // Invalidate sudo credentials
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
+        process.arguments = ["-k"]
+        try? process.run()
+        process.waitUntilExit()
     }
     
     // MARK: - Application Installation
