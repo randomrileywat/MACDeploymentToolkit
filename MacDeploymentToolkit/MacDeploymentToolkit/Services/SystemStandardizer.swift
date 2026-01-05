@@ -199,14 +199,14 @@ class SystemStandardizer {
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = nsContext
         
-        let font = NSFont.systemFont(ofSize: 36, weight: .bold)
+        let font = NSFont.systemFont(ofSize: 72, weight: .bold)
         let textAttributes: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: NSColor.white
         ]
         
         let textSize = (computerName as NSString).size(withAttributes: textAttributes)
-        let margin: CGFloat = 50
+        let margin: CGFloat = 100
         let textRect = CGRect(
             x: margin,
             y: margin,

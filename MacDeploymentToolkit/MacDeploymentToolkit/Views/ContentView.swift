@@ -33,7 +33,7 @@ struct ContentView: View {
                 selectionView
             }
         }
-        .frame(width: 650, height: 620)
+        .frame(width: 700, height: 680)
         .background(Color(NSColor.windowBackgroundColor))
     }
     
@@ -43,12 +43,12 @@ struct ContentView: View {
         HStack {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Diversified Mac Deployment Toolkit")
-                    .font(.system(size: 16, weight: .bold))
+                    .font(.system(size: 18, weight: .bold))
                     .foregroundColor(primaryBlue)
                 
                 if !deploymentManager.isDeploying {
                     Text("Select applications to install:")
-                        .font(.system(size: 10))
+                        .font(.system(size: 11))
                         .foregroundColor(.secondary)
                 }
             }
@@ -61,7 +61,7 @@ struct ContentView: View {
                     .fill(networkMonitor.isConnected ? Color.green : Color.red)
                     .frame(width: 8, height: 8)
                 Text(networkMonitor.isConnected ? "Online" : "Offline")
-                    .font(.system(size: 10))
+                    .font(.system(size: 11))
                     .foregroundColor(.secondary)
             }
         }
@@ -123,15 +123,15 @@ struct ContentView: View {
             }) {
                 HStack(spacing: 8) {
                     Image(systemName: expandedCategories.contains(category) ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.system(size: 11, weight: .semibold))
                         .foregroundColor(.secondary)
                         .frame(width: 12)
                     
                     Text(category.icon)
-                        .font(.system(size: 12))
+                        .font(.system(size: 13))
                     
                     Text(category.rawValue)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundColor(.primary)
                     
                     Spacer()
@@ -140,7 +140,7 @@ struct ContentView: View {
                     let count = selectedCountForCategory(category)
                     if count > 0 {
                         Text("\(count)")
-                            .font(.system(size: 10, weight: .medium))
+                            .font(.system(size: 11, weight: .medium))
                             .foregroundColor(.white)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
@@ -179,12 +179,12 @@ struct ContentView: View {
             .labelsHidden()
             
             Text(app.name)
-                .font(.system(size: 11))
+                .font(.system(size: 12))
                 .foregroundColor(.primary)
             
             if let equivalent = app.macOsEquivalent {
                 Text("(\(equivalent))")
-                    .font(.system(size: 9))
+                    .font(.system(size: 10))
                     .foregroundColor(.secondary)
             }
             
@@ -212,7 +212,7 @@ struct ContentView: View {
         }()
         
         return Text(text)
-            .font(.system(size: 8, weight: .medium))
+            .font(.system(size: 9, weight: .medium))
             .foregroundColor(color)
             .padding(.horizontal, 4)
             .padding(.vertical, 2)
@@ -231,7 +231,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 8) {
             Toggle(isOn: $macStandardizationEnabled) {
                 Text("Mac Standardization (Dock, Theme, Power Settings, Wallpaper)")
-                    .font(.system(size: 11))
+                    .font(.system(size: 12))
             }
             .toggleStyle(.checkbox)
             
@@ -240,31 +240,31 @@ struct ContentView: View {
                 // Computer Name Input
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Computer Name (for wallpaper):")
-                        .font(.system(size: 10))
+                        .font(.system(size: 11))
                         .foregroundColor(.secondary)
                     
                     TextField("Computer Name", text: $computerName)
                         .textFieldStyle(.roundedBorder)
-                        .frame(width: 180)
-                        .font(.system(size: 11))
+                        .frame(width: 200)
+                        .font(.system(size: 12))
                 }
                 
                 // Custom Icon Path
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Custom Logo (optional):")
-                        .font(.system(size: 10))
+                        .font(.system(size: 11))
                         .foregroundColor(.secondary)
                     
                     HStack(spacing: 4) {
                         TextField("Select an image...", text: $customIconPath)
                             .textFieldStyle(.roundedBorder)
-                            .frame(width: 180)
-                            .font(.system(size: 11))
+                            .frame(width: 200)
+                            .font(.system(size: 12))
                         
                         Button("Browse") {
                             browseForIcon()
                         }
-                        .font(.system(size: 10))
+                        .font(.system(size: 11))
                     }
                 }
             }
@@ -306,7 +306,7 @@ struct ContentView: View {
     private var statusLabel: some View {
         let (text, color) = statusInfo
         return Text(text)
-            .font(.system(size: 11))
+            .font(.system(size: 12))
             .foregroundColor(color)
     }
     
@@ -327,9 +327,9 @@ struct ContentView: View {
     private var deployButton: some View {
         Button(action: startDeployment) {
             Text("Deploy")
-                .font(.system(size: 12, weight: .bold))
+                .font(.system(size: 13, weight: .bold))
                 .foregroundColor(.white)
-                .frame(width: 140, height: 36)
+                .frame(width: 150, height: 38)
                 .background(canDeploy ? primaryBlue : Color.gray)
                 .cornerRadius(6)
         }
@@ -373,7 +373,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 10) {
             // Title with friendly message
             Text(deploymentManager.friendlyMessage)
-                .font(.system(size: 14, weight: .bold))
+                .font(.system(size: 15, weight: .bold))
                 .foregroundColor(primaryBlue)
                 .padding(.bottom, 5)
             
@@ -396,15 +396,15 @@ struct ContentView: View {
     private func taskRow(for task: DeploymentTask) -> some View {
         HStack(spacing: 10) {
             Text(task.statusIcon)
-                .font(.system(size: 14))
+                .font(.system(size: 15))
             
             VStack(alignment: .leading, spacing: 2) {
                 Text(task.name)
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(.primary)
                 
                 Text(task.statusDetail)
-                    .font(.system(size: 10))
+                    .font(.system(size: 11))
                     .foregroundColor(task.statusColor)
             }
             
@@ -417,12 +417,12 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 5) {
             HStack {
                 Text("Deployment Log:")
-                    .font(.system(size: 11, weight: .bold))
+                    .font(.system(size: 12, weight: .bold))
                 
                 Spacer()
                 
                 Text(deploymentManager.currentStatus)
-                    .font(.system(size: 10))
+                    .font(.system(size: 11))
                     .foregroundColor(.secondary)
             }
             
@@ -431,7 +431,7 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         ForEach(deploymentManager.logEntries) { entry in
                             Text(entry.message)
-                                .font(.system(size: 10, design: .monospaced))
+                                .font(.system(size: 11, design: .monospaced))
                                 .foregroundColor(entry.color)
                                 .id(entry.id)
                         }
