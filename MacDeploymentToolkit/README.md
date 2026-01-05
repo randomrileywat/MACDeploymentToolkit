@@ -30,8 +30,8 @@ A macOS application for automated deployment of AV Production engineering workst
 
 ## Requirements
 
-- macOS 13.0 (Ventura) or later
-- Xcode 15.0 or later (for building)
+- macOS 12.0 (Monterey) or later
+- Xcode 14.0 or later (for building)
 - Administrator privileges (for installation and system configuration)
 
 ## Installation

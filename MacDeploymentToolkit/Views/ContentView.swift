@@ -436,7 +436,7 @@ struct ContentView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .onChange(of: deploymentManager.logEntries.count) { _ in
+                .onChange(of: deploymentManager.logEntries.count) { newCount in
                     if let lastEntry = deploymentManager.logEntries.last {
                         proxy.scrollTo(lastEntry.id, anchor: .bottom)
                     }
