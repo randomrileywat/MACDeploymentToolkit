@@ -3,9 +3,7 @@
 .swiftpm/
 Package.resolved
 
-# Xcode
-*.xcodeproj/
-*.xcworkspace/
+# Xcode - user data only (keep .xcodeproj!)
 xcuserdata/
 *.xcuserstate
 DerivedData/
@@ -14,6 +12,7 @@ DerivedData/
 *.ipa
 *.dSYM.zip
 *.dSYM
+*.xcworkspace/
 
 # macOS
 .DS_Store
