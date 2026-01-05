@@ -357,8 +357,8 @@ struct ContentView: View {
             deploymentSummaryPanel
                 .frame(height: 320)
             
-            // Progress Bar
-            if deploymentManager.isDeploying {
+            // Progress Bar - only show while actively deploying (not after completion)
+            if deploymentManager.isDeploying && !deploymentManager.isComplete {
                 ProgressView()
                     .progressViewStyle(.linear)
                     .padding(.horizontal, 20)

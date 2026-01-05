@@ -142,7 +142,8 @@ class DirectDownloadInstaller {
     
     private func installFromPKG(_ pkgPath: URL) async throws {
         // PKG installation requires elevated privileges
-        let command = "sudo installer -pkg '\(pkgPath.path)' -target /"
+        // Use osascript with administrator privileges (don't use sudo inside - osascript already elevates)
+        let command = "installer -pkg '\(pkgPath.path)' -target /"
         let result = try await runShellCommandWithElevation(command)
         
         if result.exitCode != 0 {

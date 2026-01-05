@@ -75,39 +75,42 @@ class SystemStandardizer {
     }
     
     private func configureDockApps() async throws {
-        // Clear existing persistent apps (this removes Safari and everything else)
-        try await runDefaultsCommand("com.apple.dock", key: "persistent-apps", value: "()", type: "array")
+        // First, completely clear the dock persistent apps
+        _ = try await runShellCommand("defaults delete com.apple.dock persistent-apps 2>/dev/null || true")
         
-        // Add Finder (always first)
-        try await addAppToDock(path: "/System/Library/CoreServices/Finder.app")
+        // List of apps to add to dock
+        let dockApps: [(name: String, path: String)] = [
+            ("Finder", "/System/Library/CoreServices/Finder.app"),
+            ("Chrome", "/Applications/Google Chrome.app"),
+            ("Terminal", "/Applications/Utilities/Terminal.app"),
+            ("System Preferences", "/System/Applications/System Preferences.app"),
+            ("System Settings", "/System/Applications/System Settings.app")
+        ]
         
-        // Add Chrome if installed, otherwise skip browser (Safari not added)
-        if fileManager.fileExists(atPath: "/Applications/Google Chrome.app") {
-            try await addAppToDock(path: "/Applications/Google Chrome.app")
-        }
-        // Note: Safari is intentionally NOT added to the dock
-        
-        // Add Terminal
-        try await addAppToDock(path: "/Applications/Utilities/Terminal.app")
-        
-        // Add System Preferences/Settings
-        if #available(macOS 13.0, *) {
-            try await addAppToDock(path: "/System/Applications/System Settings.app")
-        } else {
-            try await addAppToDock(path: "/System/Applications/System Preferences.app")
+        // Add each app individually using the -array-add approach
+        for app in dockApps {
+            // Skip Chrome if not installed (Safari intentionally NOT added)
+            if app.name == "Chrome" && !fileManager.fileExists(atPath: app.path) {
+                continue
+            }
+            
+            // For System Preferences/Settings, use the one that exists
+            if app.name == "System Preferences" || app.name == "System Settings" {
+                if !fileManager.fileExists(atPath: app.path) {
+                    continue
+                }
+            }
+            
+            // Only add if the app exists
+            if fileManager.fileExists(atPath: app.path) {
+                let addCommand = """
+                defaults write com.apple.dock persistent-apps -array-add '{"tile-data"={"file-data"={"_CFURLString"="\(app.path)";};};}'
+                """
+                _ = try await runShellCommand(addCommand)
+            }
         }
     }
-    
-    private func addAppToDock(path: String) async throws {
-        guard fileManager.fileExists(atPath: path) else { return }
-        
-        let script = """
-        defaults write com.apple.dock persistent-apps -array-add '<dict><key>tile-data</key><dict><key>file-data</key><dict><key>_CFURLString</key><string>\(path)</string><key>_CFURLStringType</key><integer>0</integer></dict></dict></dict>'
-        """
-        
-        _ = try await runShellCommand(script)
-    }
-    
+
     private func restartDock() async throws {
         _ = try await runShellCommand("killall Dock")
     }
@@ -116,14 +119,15 @@ class SystemStandardizer {
     
     /// Configure power settings (never sleep when plugged in)
     func configurePowerSettings() async throws {
+        // Use osascript with admin privileges for pmset commands (avoid separate sudo prompts)
         // Prevent sleep when on AC power
-        _ = try await runShellCommand("sudo pmset -c sleep 0")
+        _ = try await runShellCommandWithElevation("pmset -c sleep 0")
         
         // Prevent display sleep when on AC power
-        _ = try await runShellCommand("sudo pmset -c displaysleep 0")
+        _ = try await runShellCommandWithElevation("pmset -c displaysleep 0")
         
         // Disable disk sleep
-        _ = try await runShellCommand("sudo pmset -c disksleep 0")
+        _ = try await runShellCommandWithElevation("pmset -c disksleep 0")
     }
     
     // MARK: - Desktop Folders
@@ -168,30 +172,19 @@ class SystemStandardizer {
             throw StandardizationError.wallpaperGenerationFailed
         }
         
-        // Fill with dark gradient background
-        let darkBlue = CGColor(red: 0.05, green: 0.1, blue: 0.2, alpha: 1.0)
-        let darkerBlue = CGColor(red: 0.02, green: 0.05, blue: 0.1, alpha: 1.0)
+        // Fill with solid black background
+        let black = CGColor(red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0)
+        context.setFillColor(black)
+        context.fill(CGRect(x: 0, y: 0, width: screenSize.width, height: screenSize.height))
         
-        let gradient = CGGradient(
-            colorsSpace: colorSpace,
-            colors: [darkBlue, darkerBlue] as CFArray,
-            locations: [0.0, 1.0]
-        )!
-        
-        context.drawLinearGradient(
-            gradient,
-            start: CGPoint(x: 0, y: screenSize.height),
-            end: CGPoint(x: screenSize.width, y: 0),
-            options: []
-        )
-        
-        // Draw company icon if provided
+        // Draw company icon in lower-right corner if provided
         if let iconPath = customIconPath,
            let iconImage = NSImage(contentsOfFile: iconPath) {
-            let iconSize: CGFloat = 200
+            let iconSize: CGFloat = 150
+            let margin: CGFloat = 50
             let iconRect = CGRect(
-                x: (screenSize.width - iconSize) / 2,
-                y: (screenSize.height - iconSize) / 2 + 50,
+                x: screenSize.width - iconSize - margin,
+                y: margin,
                 width: iconSize,
                 height: iconSize
             )
@@ -201,21 +194,22 @@ class SystemStandardizer {
             }
         }
         
-        // Draw computer name
+        // Draw computer name in lower-left corner
         let nsContext = NSGraphicsContext(cgContext: context, flipped: false)
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = nsContext
         
-        let font = NSFont.systemFont(ofSize: 48, weight: .bold)
+        let font = NSFont.systemFont(ofSize: 36, weight: .bold)
         let textAttributes: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: NSColor.white
         ]
         
         let textSize = (computerName as NSString).size(withAttributes: textAttributes)
+        let margin: CGFloat = 50
         let textRect = CGRect(
-            x: (screenSize.width - textSize.width) / 2,
-            y: (screenSize.height - textSize.height) / 2 - 100,
+            x: margin,
+            y: margin,
             width: textSize.width,
             height: textSize.height
         )
@@ -270,7 +264,7 @@ class SystemStandardizer {
             let appPath = "/Applications/\(app).app"
             if fileManager.fileExists(atPath: appPath) {
                 do {
-                    // Try to remove with elevated privileges
+                    // Use osascript with admin privileges for app removal (avoids separate sudo prompts)
                     _ = try await runShellCommandWithElevation("rm -rf '\(appPath)'")
                 } catch {
                     // Non-fatal, continue with other apps
@@ -386,6 +380,7 @@ class SystemStandardizer {
     }
     
     private func runShellCommandWithElevation(_ command: String) async throws -> ShellResult {
+        // Use osascript to run command with administrator privileges
         let script = """
         do shell script "\(command.replacingOccurrences(of: "\"", with: "\\\""))" with administrator privileges
         """

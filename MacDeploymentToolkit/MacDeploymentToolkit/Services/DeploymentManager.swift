@@ -17,6 +17,7 @@ class DeploymentManager: ObservableObject {
     // MARK: - Published Properties
     
     @Published var isDeploying = false
+    @Published var isComplete = false
     @Published var tasks: [DeploymentTask] = []
     @Published var logEntries: [LogEntry] = []
     @Published var currentStatus: String = ""
@@ -66,6 +67,7 @@ class DeploymentManager: ObservableObject {
         guard !isDeploying else { return }
         
         isDeploying = true
+        isComplete = false
         tasks.removeAll()
         logEntries.removeAll()
         
@@ -226,6 +228,7 @@ class DeploymentManager: ObservableObject {
         
         friendlyMessage = "Deployment Complete! ✓"
         currentStatus = "Deployment complete"
+        isComplete = true
         
         // Note: Keep isDeploying true so the UI stays on the deployment view
     }
@@ -233,11 +236,12 @@ class DeploymentManager: ObservableObject {
     // MARK: - Admin Privileges
     
     /// Request admin privileges once at the start - caches sudo credentials
-    /// User enters password once, then all subsequent sudo commands use cached credentials
+    /// Uses osascript to prompt for password via GUI dialog, then validates sudo
     private func requestAdminPrivileges() async -> Bool {
-        // Use osascript to prompt for admin credentials and cache them
-        let script = """
-        do shell script "sudo -v" with administrator privileges
+        // Prompt user for their password using a GUI dialog
+        let promptScript = """
+        set dialogResult to display dialog "Enter your administrator password for deployment operations:" default answer "" with hidden answer buttons {"Cancel", "OK"} default button "OK" with icon caution
+        return text returned of dialogResult
         """
         
         let process = Process()
@@ -245,7 +249,7 @@ class DeploymentManager: ObservableObject {
         let errorPipe = Pipe()
         
         process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", script]
+        process.arguments = ["-e", promptScript]
         process.standardOutput = outputPipe
         process.standardError = errorPipe
         
@@ -254,9 +258,37 @@ class DeploymentManager: ObservableObject {
             process.waitUntilExit()
             
             if process.terminationStatus == 0 {
-                // Start a background process to keep sudo alive
-                startSudoKeepalive()
-                return true
+                let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+                let password = (String(data: outputData, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                
+                if !password.isEmpty {
+                    // Validate the password by running sudo -v with the password via stdin
+                    let validateProcess = Process()
+                    let validateInput = Pipe()
+                    let validateOutput = Pipe()
+                    let validateError = Pipe()
+                    
+                    validateProcess.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
+                    validateProcess.arguments = ["-S", "-v"]
+                    validateProcess.standardInput = validateInput
+                    validateProcess.standardOutput = validateOutput
+                    validateProcess.standardError = validateError
+                    
+                    try validateProcess.run()
+                    
+                    // Write password to stdin
+                    let passwordData = (password + "\n").data(using: .utf8)!
+                    validateInput.fileHandleForWriting.write(passwordData)
+                    validateInput.fileHandleForWriting.closeFile()
+                    
+                    validateProcess.waitUntilExit()
+                    
+                    if validateProcess.terminationStatus == 0 {
+                        // Start a background process to keep sudo alive
+                        startSudoKeepalive()
+                        return true
+                    }
+                }
             }
         } catch {
             // User cancelled or error occurred
