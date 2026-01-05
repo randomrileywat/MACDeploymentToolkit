@@ -98,7 +98,7 @@ MacDeploymentToolkit/
 ## Technology Stack
 
 - **Framework**: SwiftUI
-- **Language**: Swift 5.9+
+- **Language**: Swift 5.7+
 - **Package Management**: Homebrew, mas-cli (planned)
 - **System Integration**: AppleScript, defaults, launchctl
 

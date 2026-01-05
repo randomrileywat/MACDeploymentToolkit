@@ -11,10 +11,10 @@ This toolkit automates macOS deployments by installing applications and configur
 - ✅ **Real-time Monitoring**: Network status and deployment progress tracking
 
 ## Prerequisites
-- macOS 13.0 (Ventura) or later
+- macOS 12.0 (Monterey) or later
 - Administrator privileges
 - Internet connection for downloading apps
-- Xcode 15.0+ (for building from source)
+- Xcode 14.0+ (for building from source)
 
 ## Quick Start
 

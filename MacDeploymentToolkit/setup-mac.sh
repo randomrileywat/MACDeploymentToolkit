@@ -130,8 +130,8 @@ cd "$SCRIPT_DIR"
 echo ""
 echo -e "${YELLOW}Building project...${NC}"
 
-# Try to build
-if swift build 2>&1; then
+# Try to build using xcodebuild
+if xcodebuild -project MacDeploymentToolkit.xcodeproj -scheme MacDeploymentToolkit -configuration Debug build 2>&1 | tail -20; then
     echo ""
     echo -e "${GREEN}✓ Build successful!${NC}"
 else
@@ -149,25 +149,25 @@ echo "To run the app:"
 echo ""
 
 if [ "$USE_XCODE" = true ]; then
-    echo "  Xcode:  open Package.swift"
+    echo "  Xcode:  open MacDeploymentToolkit.xcodeproj"
     echo "          Then press ⌘+R to run"
     echo ""
 fi
 
 if [ "$USE_VSCODE" = true ]; then
     echo "  VS Code:  code ."
-    echo "            Use Terminal: swift run"
+    echo "            Build with: xcodebuild -project MacDeploymentToolkit.xcodeproj -scheme MacDeploymentToolkit build"
     echo ""
 fi
 
-echo "  Command Line:  swift run"
+echo "  Command Line:  xcodebuild -project MacDeploymentToolkit.xcodeproj -scheme MacDeploymentToolkit build"
 echo ""
 
 # Offer to open now
 read -p "Open project now? [y/N]: " OPEN_NOW
 if [[ "$OPEN_NOW" =~ ^[Yy]$ ]]; then
     if [ "$USE_XCODE" = true ]; then
-        open Package.swift
+        open MacDeploymentToolkit.xcodeproj
     elif [ "$USE_VSCODE" = true ]; then
         code .
     fi
