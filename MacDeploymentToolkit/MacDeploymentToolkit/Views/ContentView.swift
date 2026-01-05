@@ -33,7 +33,7 @@ struct ContentView: View {
                 selectionView
             }
         }
-        .frame(width: 650, height: 620)
+        .frame(width: 630, height: 520)
         .background(Color(NSColor.windowBackgroundColor))
     }
     
