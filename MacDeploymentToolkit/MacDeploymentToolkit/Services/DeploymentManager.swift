@@ -299,11 +299,15 @@ class DeploymentManager: ObservableObject {
         currentMessageIndex = 0
         friendlyMessage = friendlyMessages[0]
         
-        friendlyMessageTimer = Timer.scheduledTimer(withTimeInterval: 8.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                guard let self = self else { return }
-                self.currentMessageIndex = (self.currentMessageIndex + 1) % self.friendlyMessages.count
-                self.friendlyMessage = self.friendlyMessages[self.currentMessageIndex]
+        friendlyMessageTimer = Timer.scheduledTimer(withTimeInterval: 8.0, repeats: true) { [weak self] timer in
+            guard let self = self else {
+                timer.invalidate()
+                return
+            }
+            let nextIndex = (self.currentMessageIndex + 1) % self.friendlyMessages.count
+            DispatchQueue.main.async {
+                self.currentMessageIndex = nextIndex
+                self.friendlyMessage = self.friendlyMessages[nextIndex]
             }
         }
     }

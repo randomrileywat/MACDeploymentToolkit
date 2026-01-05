@@ -27,9 +27,7 @@ class NetworkMonitor: ObservableObject {
     
     init() {
         // Check immediately
-        Task {
-            await checkConnection()
-        }
+        isConnected = performConnectivityCheckSync()
         // Then check every 5 seconds
         startMonitoring()
     }
@@ -40,20 +38,26 @@ class NetworkMonitor: ObservableObject {
     
     /// Start periodic network monitoring
     private func startMonitoring() {
-        timer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                await self?.checkConnection()
+        timer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] timer in
+            guard let self = self else {
+                timer.invalidate()
+                return
+            }
+            // Perform check synchronously since SCNetworkReachability is synchronous
+            let connected = self.performConnectivityCheckSync()
+            DispatchQueue.main.async {
+                self.isConnected = connected
             }
         }
     }
     
     /// Check network connection using SCNetworkReachability
     private func checkConnection() async {
-        isConnected = await performConnectivityCheck()
+        isConnected = performConnectivityCheckSync()
     }
     
-    /// Perform a connectivity check using SystemConfiguration
-    func performConnectivityCheck() async -> Bool {
+    /// Perform a connectivity check using SystemConfiguration (synchronous)
+    func performConnectivityCheckSync() -> Bool {
         var zeroAddress = sockaddr_in()
         zeroAddress.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
         zeroAddress.sin_family = sa_family_t(AF_INET)
