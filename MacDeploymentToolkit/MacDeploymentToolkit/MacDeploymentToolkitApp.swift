@@ -20,7 +20,7 @@ struct MacDeploymentToolkitApp: App {
             ContentView()
                 .environmentObject(deploymentManager)
                 .environmentObject(networkMonitor)
-                .frame(width: 690, height: 740)
         }
+        .windowResizability(.contentSize)
     }
 }

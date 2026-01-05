@@ -33,7 +33,7 @@ struct ContentView: View {
                 selectionView
             }
         }
-        .frame(width: 630, height: 520)
+        .frame(width: 650, height: 620)
         .background(Color(NSColor.windowBackgroundColor))
     }
     
@@ -235,42 +235,41 @@ struct ContentView: View {
             }
             .toggleStyle(.checkbox)
             
-            if macStandardizationEnabled {
-                HStack(spacing: 16) {
-                    // Computer Name Input
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Computer Name (for wallpaper):")
-                            .font(.system(size: 10))
-                            .foregroundColor(.secondary)
-                        
-                        TextField("Computer Name", text: $computerName)
+            // Always show option fields
+            HStack(spacing: 16) {
+                // Computer Name Input
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Computer Name (for wallpaper):")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                    
+                    TextField("Computer Name", text: $computerName)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 180)
+                        .font(.system(size: 11))
+                }
+                
+                // Custom Icon Path
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Custom Logo (optional):")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                    
+                    HStack(spacing: 4) {
+                        TextField("Select an image...", text: $customIconPath)
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 180)
                             .font(.system(size: 11))
-                    }
-                    
-                    // Custom Icon Path
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Custom Logo (optional):")
-                            .font(.system(size: 10))
-                            .foregroundColor(.secondary)
                         
-                        HStack(spacing: 4) {
-                            TextField("Select an image...", text: $customIconPath)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: 180)
-                                .font(.system(size: 11))
-                            
-                            Button("Browse") {
-                                browseForIcon()
-                            }
-                            .font(.system(size: 10))
+                        Button("Browse") {
+                            browseForIcon()
                         }
+                        .font(.system(size: 10))
                     }
                 }
-                .padding(.leading, 18)
-                .padding(.top, 2)
             }
+            .padding(.leading, 18)
+            .padding(.top, 2)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
