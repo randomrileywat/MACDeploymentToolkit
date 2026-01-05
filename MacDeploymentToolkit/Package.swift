@@ -17,18 +17,7 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "MacDeploymentToolkit",
-            path: ".",
-            sources: [
-                "MacDeploymentToolkitApp.swift",
-                "Models/ApplicationDefinition.swift",
-                "Models/ApplicationCatalog.swift",
-                "Views/ContentView.swift",
-                "Services/DeploymentManager.swift",
-                "Services/NetworkMonitor.swift",
-                "Services/HomebrewInstaller.swift",
-                "Services/DirectDownloadInstaller.swift",
-                "Services/SystemStandardizer.swift"
-            ]
+            path: "Sources/MacDeploymentToolkit"
         )
     ]
 )
