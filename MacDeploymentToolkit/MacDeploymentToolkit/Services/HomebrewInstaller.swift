@@ -82,7 +82,15 @@ class HomebrewInstaller {
         let command: String
         switch type {
         case .cask:
-            command = "\(effectiveBrewPath) install --cask \(packageId)"
+            // Use --force to overwrite existing installations
+            // Some casks require sudo for installation (e.g., ndi-tools, wireshark, resolume-arena)
+            // Use osascript with admin privileges to handle password prompt
+            command = "\(effectiveBrewPath) install --cask --force \(packageId)"
+            let result = try await runShellCommandWithElevation(command)
+            if result.exitCode != 0 {
+                throw HomebrewError.packageInstallFailed(packageId, result.error)
+            }
+            return
         case .formula:
             command = "\(effectiveBrewPath) install \(packageId)"
         }
@@ -141,6 +149,54 @@ class HomebrewInstaller {
             
             // Add Homebrew paths to PATH if needed
             var env = process.environment ?? [:]
+            let homebrewPaths = "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin"
+            if let existingPath = env["PATH"] {
+                env["PATH"] = "\(homebrewPaths):\(existingPath)"
+            } else {
+                env["PATH"] = homebrewPaths
+            }
+            process.environment = env
+            
+            do {
+                try process.run()
+                process.waitUntilExit()
+                
+                let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+                let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+                
+                let output = String(data: outputData, encoding: .utf8) ?? ""
+                let error = String(data: errorData, encoding: .utf8) ?? ""
+                
+                continuation.resume(returning: ShellResult(
+                    output: output,
+                    error: error,
+                    exitCode: process.terminationStatus
+                ))
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
+    }
+    
+    private func runShellCommandWithElevation(_ command: String) async throws -> ShellResult {
+        // Use osascript to run command with administrator privileges
+        // This handles casks that require sudo internally
+        let script = """
+        do shell script "\(command.replacingOccurrences(of: "\"", with: "\\\""))" with administrator privileges
+        """
+        
+        return try await withCheckedThrowingContinuation { continuation in
+            let process = Process()
+            let outputPipe = Pipe()
+            let errorPipe = Pipe()
+            
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            process.arguments = ["-e", script]
+            process.standardOutput = outputPipe
+            process.standardError = errorPipe
+            
+            // Add Homebrew paths to environment
+            var env = ProcessInfo.processInfo.environment
             let homebrewPaths = "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin"
             if let existingPath = env["PATH"] {
                 env["PATH"] = "\(homebrewPaths):\(existingPath)"

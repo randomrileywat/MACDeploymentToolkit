@@ -177,9 +177,25 @@ class SystemStandardizer {
         context.setFillColor(black)
         context.fill(CGRect(x: 0, y: 0, width: screenSize.width, height: screenSize.height))
         
-        // Draw company icon in lower-right corner if provided
-        if let iconPath = customIconPath,
-           let iconImage = NSImage(contentsOfFile: iconPath) {
+        // Draw company icon in lower-right corner
+        // Try custom path first, then fall back to bundled default logo
+        var iconImage: NSImage? = nil
+        
+        if let iconPath = customIconPath, !iconPath.isEmpty {
+            iconImage = NSImage(contentsOfFile: iconPath)
+        }
+        
+        // Fall back to bundled default logo if no custom icon or loading failed
+        if iconImage == nil {
+            // Try to load from app bundle
+            if let bundledPath = Bundle.main.path(forResource: "DefaultLogo", ofType: "png") {
+                iconImage = NSImage(contentsOfFile: bundledPath)
+            } else if let bundledPath = Bundle.main.path(forResource: "AppIcon", ofType: "icns") {
+                iconImage = NSImage(contentsOfFile: bundledPath)
+            }
+        }
+        
+        if let image = iconImage {
             let iconSize: CGFloat = 150
             let margin: CGFloat = 50
             let iconRect = CGRect(
@@ -189,7 +205,7 @@ class SystemStandardizer {
                 height: iconSize
             )
             
-            if let cgImage = iconImage.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+            if let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
                 context.draw(cgImage, in: iconRect)
             }
         }

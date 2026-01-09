@@ -16,6 +16,7 @@
 		007 /* HomebrewInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = 107; };
 		008 /* DirectDownloadInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = 108; };
 		009 /* SystemStandardizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 109; };
+		010 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 110; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -29,6 +30,7 @@
 		107 /* HomebrewInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomebrewInstaller.swift; sourceTree = "<group>"; };
 		108 /* DirectDownloadInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectDownloadInstaller.swift; sourceTree = "<group>"; };
 		109 /* SystemStandardizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemStandardizer.swift; sourceTree = "<group>"; };
+		110 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -40,6 +42,17 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXResourcesBuildPhase section */
+		402 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				010 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXGroup section */
 		300 = {
@@ -54,6 +67,7 @@
 			isa = PBXGroup;
 			children = (
 				101 /* MacDeploymentToolkitApp.swift */,
+				110 /* Assets.xcassets */,
 				311 /* Views */,
 				312 /* Models */,
 				313 /* Services */,
@@ -107,6 +121,7 @@
 			buildPhases = (
 				401 /* Sources */,
 				200 /* Frameworks */,
+				402 /* Resources */,
 			);
 			buildRules = (
 			);
