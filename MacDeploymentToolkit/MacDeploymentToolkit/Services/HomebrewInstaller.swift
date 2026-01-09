@@ -59,8 +59,97 @@ class HomebrewInstaller {
     
     // MARK: - Package Installation
     
-    /// Check if a package is installed
+    /// Map of Homebrew package IDs to their actual app names in /Applications
+    /// This handles cases where the app was installed manually (not via Homebrew)
+    private let packageToAppName: [String: String] = [
+        "spotify": "Spotify",
+        "google-chrome": "Google Chrome",
+        "vlc": "VLC",
+        "zoom": "zoom.us",
+        "slack": "Slack",
+        "discord": "Discord",
+        "visual-studio-code": "Visual Studio Code",
+        "microsoft-teams": "Microsoft Teams",
+        "dropbox": "Dropbox",
+        "1password": "1Password",
+        "firefox": "Firefox",
+        "obs": "OBS",
+        "steam": "Steam",
+        "handbrake": "HandBrake",
+        "audacity": "Audacity",
+        "gimp": "GIMP",
+        "inkscape": "Inkscape",
+        "blender": "Blender",
+        "figma": "Figma",
+        "sketch": "Sketch",
+        "affinity-designer": "Affinity Designer",
+        "affinity-photo": "Affinity Photo",
+        "affinity-publisher": "Affinity Publisher",
+        "adobe-creative-cloud": "Adobe Creative Cloud",
+        "notion": "Notion",
+        "evernote": "Evernote",
+        "sublime-text": "Sublime Text",
+        "atom": "Atom",
+        "iterm2": "iTerm",
+        "docker": "Docker",
+        "postman": "Postman",
+        "insomnia": "Insomnia",
+        "github": "GitHub Desktop",
+        "sourcetree": "Sourcetree",
+        "cyberduck": "Cyberduck",
+        "transmit": "Transmit",
+        "alfred": "Alfred",
+        "raycast": "Raycast",
+        "rectangle": "Rectangle",
+        "magnet": "Magnet",
+        "bartender": "Bartender",
+        "cleanmymac": "CleanMyMac X",
+        "appcleaner": "AppCleaner",
+        "the-unarchiver": "The Unarchiver",
+        "keka": "Keka",
+        "ndi-tools": "NDI Tools",
+        "wireshark": "Wireshark",
+        "resolume-arena": "Resolume Arena",
+        "blackmagic-disk-speed-test": "Blackmagic Disk Speed Test",
+        "qlab": "QLab",
+        "companion": "Companion",
+        "touchosc": "TouchOSC",
+        "dante-controller": "Dante Controller",
+        "dante-virtual-soundcard": "Dante Virtual Soundcard"
+    ]
+    
+    /// Check if a package is installed (checks /Applications first, then Homebrew)
     func isInstalled(packageId: String, type: InstallMethod.HomebrewType) async -> Bool {
+        // For casks, first check if the app exists in /Applications
+        // This handles apps that were installed manually (not via Homebrew)
+        if type == .cask {
+            // Try to find the app in /Applications
+            if let appName = packageToAppName[packageId] {
+                let appPath = "/Applications/\(appName).app"
+                if FileManager.default.fileExists(atPath: appPath) {
+                    return true
+                }
+                // Also check ~/Applications
+                let userAppPath = FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent("Applications")
+                    .appendingPathComponent("\(appName).app")
+                    .path
+                if FileManager.default.fileExists(atPath: userAppPath) {
+                    return true
+                }
+            }
+            
+            // Also try a capitalized version of the packageId as app name
+            let capitalizedName = packageId.split(separator: "-")
+                .map { $0.prefix(1).uppercased() + $0.dropFirst() }
+                .joined(separator: " ")
+            let fallbackPath = "/Applications/\(capitalizedName).app"
+            if FileManager.default.fileExists(atPath: fallbackPath) {
+                return true
+            }
+        }
+        
+        // Fall back to checking Homebrew's package list
         do {
             let command: String
             switch type {
