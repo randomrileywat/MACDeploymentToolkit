@@ -46,6 +46,8 @@ class DirectDownloadInstaller {
             try await installFromZIP(localFile, appName: name)
         case .app:
             try await installAppBundle(localFile, appName: name)
+        case .run:
+            try await installFromRUN(localFile, appName: name)
         }
     }
     
@@ -194,6 +196,24 @@ class DirectDownloadInstaller {
         try fileManager.copyItem(at: appPath, to: destination)
     }
     
+    // MARK: - RUN Script Installation (Self-extracting shell script)
+    
+    private func installFromRUN(_ runPath: URL, appName: String) async throws {
+        // Make the .run file executable
+        let chmodResult = try await runShellCommand("chmod +x '\(runPath.path)'")
+        if chmodResult.exitCode != 0 {
+            throw DirectDownloadError.runScriptFailed(appName, "Failed to make script executable: \(chmodResult.error)")
+        }
+        
+        // Execute the .run script with elevated privileges
+        // The script is self-extracting and will install the application
+        let result = try await runShellCommandWithElevation(runPath.path)
+        
+        if result.exitCode != 0 {
+            throw DirectDownloadError.runScriptFailed(appName, result.error)
+        }
+    }
+    
     // MARK: - Shell Command Execution
     
     private func runShellCommand(_ command: String) async throws -> ShellResult {
@@ -276,6 +296,7 @@ enum DirectDownloadError: LocalizedError {
     case foundPKGInDMG(URL)
     case pkgInstallFailed(String, String)
     case extractFailed(String, String)
+    case runScriptFailed(String, String)
     
     var errorDescription: String? {
         switch self {
@@ -293,6 +314,8 @@ enum DirectDownloadError: LocalizedError {
             return "Failed to install \(name): \(error)"
         case .extractFailed(let name, let error):
             return "Failed to extract \(name): \(error)"
+        case .runScriptFailed(let name, let error):
+            return "Failed to run installer script for \(name): \(error)"
         }
     }
 }

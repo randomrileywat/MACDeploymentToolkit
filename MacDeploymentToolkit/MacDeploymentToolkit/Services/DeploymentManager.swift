@@ -354,7 +354,7 @@ class DeploymentManager: ObservableObject {
             throw DeploymentError.notImplemented("Mac App Store installation")
             
         case .directDownload(let format):
-            guard let downloadUrl = app.downloadUrl else {
+            guard let downloadUrl = app.effectiveDownloadUrl else {
                 // Try Supabase for apps without direct URLs
                 throw DeploymentError.missingDownloadUrl(app.name)
             }

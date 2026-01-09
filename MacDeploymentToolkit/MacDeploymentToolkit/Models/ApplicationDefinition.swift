@@ -17,9 +17,32 @@ struct ApplicationDefinition: Identifiable, Hashable {
     let category: ApplicationCategory
     let installMethod: InstallMethod
     let packageId: String? // For Homebrew casks/formulas or mas-cli app IDs
-    let downloadUrl: String? // For direct downloads
+    let downloadUrl: String? // For direct downloads (Intel/x86_64 or universal)
+    let downloadUrlArm: String? // For ARM/Apple Silicon downloads (nil = use downloadUrl for both)
     let version: String?
     let macOsEquivalent: String? // If different from Windows version
+    
+    /// Initialize with optional ARM-specific URL
+    init(name: String, category: ApplicationCategory, installMethod: InstallMethod,
+         packageId: String? = nil, downloadUrl: String? = nil, downloadUrlArm: String? = nil,
+         version: String? = nil, macOsEquivalent: String? = nil) {
+        self.name = name
+        self.category = category
+        self.installMethod = installMethod
+        self.packageId = packageId
+        self.downloadUrl = downloadUrl
+        self.downloadUrlArm = downloadUrlArm
+        self.version = version
+        self.macOsEquivalent = macOsEquivalent
+    }
+    
+    /// Returns the appropriate download URL based on system architecture
+    var effectiveDownloadUrl: String? {
+        if SystemArchitecture.isAppleSilicon, let armUrl = downloadUrlArm {
+            return armUrl
+        }
+        return downloadUrl
+    }
     
     func hash(into hasher: inout Hasher) {
         hasher.combine(id)
@@ -27,6 +50,25 @@ struct ApplicationDefinition: Identifiable, Hashable {
     
     static func == (lhs: ApplicationDefinition, rhs: ApplicationDefinition) -> Bool {
         lhs.id == rhs.id
+    }
+}
+
+// MARK: - System Architecture Detection
+
+/// Utility for detecting CPU architecture
+enum SystemArchitecture {
+    /// Returns true if running on Apple Silicon (ARM64)
+    static var isAppleSilicon: Bool {
+        #if arch(arm64)
+        return true
+        #else
+        return false
+        #endif
+    }
+    
+    /// Returns the current architecture name
+    static var current: String {
+        isAppleSilicon ? "Apple Silicon (ARM64)" : "Intel (x86_64)"
     }
 }
 
@@ -76,6 +118,7 @@ enum InstallMethod: Equatable {
         case pkg = "pkg"
         case zip = "zip"
         case app = "app" // .app bundle in zip/dmg
+        case run = "run" // Self-extracting shell script (requires chmod +x and sudo)
     }
 }
 
