@@ -60,7 +60,8 @@ class DirectDownloadInstaller {
         // Remove existing file if present
         try? fileManager.removeItem(at: localUrl)
         
-        let (tempUrl, response) = try await URLSession.shared.download(from: url)
+        // Use continuation-based download for macOS 11 compatibility
+        let (tempUrl, response) = try await downloadWithContinuation(from: url)
         
         guard let httpResponse = response as? HTTPURLResponse,
               (200...299).contains(httpResponse.statusCode) else {
@@ -69,6 +70,36 @@ class DirectDownloadInstaller {
         
         try fileManager.moveItem(at: tempUrl, to: localUrl)
         return localUrl
+    }
+    
+    /// Downloads a file using URLSession with async/await compatibility for macOS 11+
+    private func downloadWithContinuation(from url: URL) async throws -> (URL, URLResponse) {
+        return try await withCheckedThrowingContinuation { continuation in
+            let task = URLSession.shared.downloadTask(with: url) { localUrl, response, error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                
+                guard let localUrl = localUrl, let response = response else {
+                    continuation.resume(throwing: DirectDownloadError.downloadFailed(url.lastPathComponent))
+                    return
+                }
+                
+                // Move to a temp location we control (the original gets deleted after this callback)
+                let tempDestination = FileManager.default.temporaryDirectory
+                    .appendingPathComponent(UUID().uuidString)
+                    .appendingPathExtension(url.pathExtension)
+                
+                do {
+                    try FileManager.default.moveItem(at: localUrl, to: tempDestination)
+                    continuation.resume(returning: (tempDestination, response))
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+            task.resume()
+        }
     }
     
     // MARK: - DMG Installation
