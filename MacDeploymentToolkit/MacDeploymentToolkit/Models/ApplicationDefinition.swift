@@ -197,7 +197,8 @@ struct LogEntry: Identifiable {
 // MARK: - Log Level Colors
 
 extension Color {
-    static let logCyan = Color.cyan
+    // Color.cyan is macOS 12+, so we define our own for macOS 11 compatibility
+    static let logCyan = Color(red: 0, green: 0.75, blue: 0.85)
     static let logYellow = Color.yellow
     static let logGreen = Color.green
     static let logRed = Color.red
