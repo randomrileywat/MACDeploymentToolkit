@@ -244,36 +244,54 @@ class DeploymentManager: ObservableObject {
         return text returned of dialogResult
         """
         
-        let process = Process()
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", promptScript]
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
-        
-        do {
-            try process.run()
-            process.waitUntilExit()
-            
-            if process.terminationStatus == 0 {
-                let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-                let password = (String(data: outputData, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        // Run osascript asynchronously to avoid blocking UI
+        let password: String? = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let process = Process()
+                let outputPipe = Pipe()
+                let errorPipe = Pipe()
                 
-                if !password.isEmpty {
-                    // Validate the password by running sudo -v with the password via stdin
-                    let validateProcess = Process()
-                    let validateInput = Pipe()
-                    let validateOutput = Pipe()
-                    let validateError = Pipe()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+                process.arguments = ["-e", promptScript]
+                process.standardOutput = outputPipe
+                process.standardError = errorPipe
+                
+                do {
+                    try process.run()
+                    process.waitUntilExit()
                     
-                    validateProcess.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
-                    validateProcess.arguments = ["-S", "-v"]
-                    validateProcess.standardInput = validateInput
-                    validateProcess.standardOutput = validateOutput
-                    validateProcess.standardError = validateError
-                    
+                    if process.terminationStatus == 0 {
+                        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+                        let pwd = (String(data: outputData, encoding: .utf8) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                        continuation.resume(returning: pwd.isEmpty ? nil : pwd)
+                    } else {
+                        continuation.resume(returning: nil)
+                    }
+                } catch {
+                    continuation.resume(returning: nil)
+                }
+            }
+        }
+        
+        guard let password = password else {
+            return false
+        }
+        
+        // Validate the password asynchronously
+        let isValid: Bool = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let validateProcess = Process()
+                let validateInput = Pipe()
+                let validateOutput = Pipe()
+                let validateError = Pipe()
+                
+                validateProcess.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
+                validateProcess.arguments = ["-S", "-v"]
+                validateProcess.standardInput = validateInput
+                validateProcess.standardOutput = validateOutput
+                validateProcess.standardError = validateError
+                
+                do {
                     try validateProcess.run()
                     
                     // Write password to stdin
@@ -282,16 +300,16 @@ class DeploymentManager: ObservableObject {
                     validateInput.fileHandleForWriting.closeFile()
                     
                     validateProcess.waitUntilExit()
-                    
-                    if validateProcess.terminationStatus == 0 {
-                        // Start a background process to keep sudo alive
-                        startSudoKeepalive()
-                        return true
-                    }
+                    continuation.resume(returning: validateProcess.terminationStatus == 0)
+                } catch {
+                    continuation.resume(returning: false)
                 }
             }
-        } catch {
-            // User cancelled or error occurred
+        }
+        
+        if isValid {
+            startSudoKeepalive()
+            return true
         }
         
         return false
@@ -311,12 +329,14 @@ class DeploymentManager: ObservableObject {
     private func stopSudoKeepalive() {
         sudoKeepaliveProcess?.terminate()
         sudoKeepaliveProcess = nil
-        // Invalidate sudo credentials
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
-        process.arguments = ["-k"]
-        try? process.run()
-        process.waitUntilExit()
+        // Invalidate sudo credentials (fire and forget, don't block)
+        DispatchQueue.global(qos: .utility).async {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
+            process.arguments = ["-k"]
+            try? process.run()
+            process.waitUntilExit()
+        }
     }
     
     // MARK: - Application Installation
