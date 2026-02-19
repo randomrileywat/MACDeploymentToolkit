@@ -281,11 +281,10 @@ class SystemStandardizer {
         ]
         
         let textSize = (computerName as NSString).size(withAttributes: textAttributes)
-        let margin: CGFloat = 100
-        // Shift left and down slightly to better match the icon placement feel
+        // Position text closer to the corner to match icon placement feel
         let textRect = CGRect(
-            x: margin - 15,
-            y: margin - 15,
+            x: 60,
+            y: 50,
             width: textSize.width,
             height: textSize.height
         )
