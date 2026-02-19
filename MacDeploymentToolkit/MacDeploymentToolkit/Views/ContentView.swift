@@ -45,9 +45,14 @@ struct ContentView: View {
     static func cleanComputerName() -> String {
         let rawName = Host.current().localizedName ?? "Mac"
         
+        // Normalize curly/smart apostrophes (U+2019 ') to straight apostrophes (')
+        // macOS uses smart quotes in computer names like "ENG-105\u{2019}s Mac Studio"
+        let normalized = rawName.replacingOccurrences(of: "\u{2019}", with: "'")
+                                .replacingOccurrences(of: "\u{2018}", with: "'")
+        
         // Pattern: remove "'s <Mac variant>" suffix
         // Handles: "'s Mac Mini", "'s MacBook Pro", "'s MacBook Air", "'s iMac", "'s Mac Pro", "'s Mac Studio", "'s Mac", etc.
-        let patterns = [
+        let suffixes = [
             "'s Mac Mini", "'s Mac mini",
             "'s MacBook Pro", "'s MacBook Air", "'s MacBook",
             "'s iMac Pro", "'s iMac",
@@ -55,9 +60,9 @@ struct ContentView: View {
             "'s Mac"  // Catch-all for any other Mac variant
         ]
         
-        var cleaned = rawName
-        for pattern in patterns {
-            if let range = cleaned.range(of: pattern, options: .caseInsensitive) {
+        var cleaned = normalized
+        for suffix in suffixes {
+            if let range = cleaned.range(of: suffix, options: .caseInsensitive) {
                 cleaned = String(cleaned[cleaned.startIndex..<range.lowerBound])
                 break
             }
