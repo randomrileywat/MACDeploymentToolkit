@@ -79,7 +79,7 @@ class HomebrewInstaller {
     /// Update Homebrew sources
     func updateHomebrew() async {
         do {
-            _ = try await runShellCommand("brew update")
+            _ = try await runBrewCommand(["update"])
         } catch {
             // Non-fatal, continue with existing catalog
             print("Warning: Failed to update Homebrew: \(error)")
@@ -186,15 +186,15 @@ class HomebrewInstaller {
         
         // Fall back to checking Homebrew's package list
         do {
-            let command: String
+            let args: [String]
             switch type {
             case .cask:
-                command = "brew list --cask \(packageId)"
+                args = ["list", "--cask", packageId]
             case .formula:
-                command = "brew list \(packageId)"
+                args = ["list", packageId]
             }
             
-            let result = try await runShellCommand(command)
+            let result = try await runBrewCommand(args)
             return result.exitCode == 0
         } catch {
             return false
@@ -203,34 +203,34 @@ class HomebrewInstaller {
     
     /// Install a package via Homebrew
     func install(packageId: String, type: InstallMethod.HomebrewType) async throws {
-        let command: String
+        let args: [String]
         switch type {
         case .cask:
-            command = "brew install --cask --force \(packageId)"
+            args = ["install", "--cask", "--force", packageId]
         case .formula:
-            command = "brew install \(packageId)"
+            args = ["install", packageId]
         }
         
-        let result = try await runShellCommand(command)
+        let result = try await runBrewCommand(args)
         
         if result.exitCode != 0 {
             // Include full diagnostics in the error so they appear in the deployment log
-            let diagnostic = "\(result.error)\n[cmd: \(command)]\n[stdout: \(result.output.prefix(300))]\n[brew resolved: \(effectiveBrewPath)]"
+            let diagnostic = "\(result.error)\n[args: \(args)]\n[stdout: \(result.output.prefix(300))]\n[brew: \(effectiveBrewPath)]"
             throw HomebrewError.packageInstallFailed(packageId, diagnostic)
         }
     }
     
     /// Uninstall a package via Homebrew
     func uninstall(packageId: String, type: InstallMethod.HomebrewType) async throws {
-        let command: String
+        let args: [String]
         switch type {
         case .cask:
-            command = "brew uninstall --cask \(packageId)"
+            args = ["uninstall", "--cask", packageId]
         case .formula:
-            command = "brew uninstall \(packageId)"
+            args = ["uninstall", packageId]
         }
         
-        let result = try await runShellCommand(command)
+        let result = try await runBrewCommand(args)
         
         if result.exitCode != 0 {
             throw HomebrewError.packageUninstallFailed(packageId, result.error)
@@ -239,19 +239,63 @@ class HomebrewInstaller {
     
     /// Get information about a package
     func packageInfo(packageId: String, type: InstallMethod.HomebrewType) async throws -> String {
-        let command: String
+        let args: [String]
         switch type {
         case .cask:
-            command = "brew info --cask \(packageId)"
+            args = ["info", "--cask", packageId]
         case .formula:
-            command = "brew info \(packageId)"
+            args = ["info", packageId]
         }
         
-        let result = try await runShellCommand(command)
+        let result = try await runBrewCommand(args)
         return result.output
     }
     
     // MARK: - Shell Command Execution
+    
+    /// Runs the brew binary DIRECTLY as a process — no shell, no PATH lookup.
+    /// This is the most reliable way to invoke brew from a sandboxed/hardened app.
+    private func runBrewCommand(_ arguments: [String]) async throws -> ShellResult {
+        return try await withCheckedThrowingContinuation { continuation in
+            let process = Process()
+            let outputPipe = Pipe()
+            let errorPipe = Pipe()
+            
+            // Execute brew directly — bypasses zsh, PATH, and shell entirely
+            process.executableURL = URL(fileURLWithPath: self.effectiveBrewPath)
+            process.arguments = arguments
+            process.standardOutput = outputPipe
+            process.standardError = errorPipe
+            
+            // Set Homebrew env vars so brew's internal Ruby scripts work correctly
+            var env = ProcessInfo.processInfo.environment
+            let homebrewPrefix = self.effectiveBrewPath.contains("/opt/homebrew") ? "/opt/homebrew" : "/usr/local"
+            env["HOMEBREW_PREFIX"] = homebrewPrefix
+            env["HOMEBREW_CELLAR"] = "\(homebrewPrefix)/Cellar"
+            env["HOMEBREW_REPOSITORY"] = homebrewPrefix
+            env["PATH"] = "\(homebrewPrefix)/bin:\(homebrewPrefix)/sbin:/usr/bin:/bin:/usr/sbin:/sbin:\(env["PATH"] ?? "")"
+            process.environment = env
+            
+            do {
+                try process.run()
+                process.waitUntilExit()
+                
+                let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+                let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+                
+                let output = String(data: outputData, encoding: .utf8) ?? ""
+                let error = String(data: errorData, encoding: .utf8) ?? ""
+                
+                continuation.resume(returning: ShellResult(
+                    output: output,
+                    error: error,
+                    exitCode: process.terminationStatus
+                ))
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
+    }
     
     /// Runs a raw shell command WITHOUT injecting Homebrew PATH.
     /// Used by isHomebrewInstalled() to avoid circular dependency with commandWithPath.
