@@ -73,8 +73,11 @@ class SystemStandardizer {
         // Clear persistent apps and add standard ones
         try await configureDockApps()
         
-        // Restart Dock to apply changes
-        try await restartDock()
+        // NOTE: Dock restart is deferred — the Dock process "owns" its
+        // persistent-apps array and writes it back to cfprefsd periodically.
+        // If we restart now and later add more apps (Step 4), the running Dock
+        // will overwrite those additions. DeploymentManager calls restartDock()
+        // once after ALL dock modifications are complete.
     }
     
     /// All app names from the deployment catalog — set by DeploymentManager before standardization.
@@ -166,17 +169,20 @@ class SystemStandardizer {
     
     /// Add an application to the Dock, skipping if already added this session.
     /// Uses in-memory tracking (not plist reading) to prevent duplicates reliably.
-    func addAppToDock(appPath: String) async throws {
-        guard fileManager.fileExists(atPath: appPath) else { return }
+    /// Returns true if the app was actually added, false if skipped (already in dock).
+    @discardableResult
+    func addAppToDock(appPath: String) async throws -> Bool {
+        guard fileManager.fileExists(atPath: appPath) else { return false }
         
         let appLabel = (appPath as NSString).lastPathComponent
             .replacingOccurrences(of: ".app", with: "")
             .lowercased()
         
         // Check in-memory set to prevent duplicates
-        if dockLabelsAdded.contains(appLabel) { return }
+        if dockLabelsAdded.contains(appLabel) { return false }
         
         try await addAppToDockInternal(appPath: appPath)
+        return true
     }
     
     /// Add an application to the Dock using `defaults write -array-add` and track it in memory.
@@ -193,7 +199,11 @@ class SystemStandardizer {
         dockLabelsAdded.insert(appLabel.lowercased())
     }
 
-    private func restartDock() async throws {
+    /// Restart the Dock to apply all pending changes.
+    /// Call this ONCE after all dock modifications (settings, apps, pins) are complete.
+    /// The Dock process owns its persistent-apps array and syncs it back to cfprefsd,
+    /// so any `defaults write` done while the Dock is running may be overwritten.
+    func restartDock() async throws {
         _ = try await runShellCommand("killall Dock")
     }
     

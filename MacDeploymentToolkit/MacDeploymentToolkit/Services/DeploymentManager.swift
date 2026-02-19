@@ -267,34 +267,27 @@ class DeploymentManager: ObservableObject {
             for app in successfulApps {
                 if let appPath = findInstalledAppPath(app) {
                     do {
-                        try await systemStandardizer.addAppToDock(appPath: appPath)
-                        log("  • Pinned \(app.name) to Dock", color: .logGray)
+                        let added = try await systemStandardizer.addAppToDock(appPath: appPath)
+                        if added {
+                            log("  • Pinned \(app.name) to Dock (\(appPath))", color: .logGray)
+                        } else {
+                            log("  • \(app.name) already in Dock", color: .logGray)
+                        }
                     } catch {
                         log("  • Could not pin \(app.name) to Dock", color: .logGray)
                     }
                 }
             }
-            
-            // Restart Dock to apply pinned apps
+            log("")
+        }
+        
+        // Restart Dock once — AFTER all modifications (standardization + pinning).
+        // The Dock process "owns" its persistent-apps and syncs them back to cfprefsd,
+        // so restarting mid-flow causes it to overwrite later additions.
+        if macStandardization || !successfulApps.isEmpty {
             do {
-                _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
-                    DispatchQueue.global(qos: .userInitiated).async {
-                        let process = Process()
-                        let outputPipe = Pipe()
-                        process.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
-                        process.arguments = ["Dock"]
-                        process.standardOutput = outputPipe
-                        process.standardError = Pipe()
-                        do {
-                            try process.run()
-                            process.waitUntilExit()
-                            continuation.resume(returning: "")
-                        } catch {
-                            continuation.resume(throwing: error)
-                        }
-                    }
-                }
-                log("✓ Dock updated with new applications", color: .logGreen)
+                try await systemStandardizer.restartDock()
+                log("✓ Dock updated", color: .logGreen)
             } catch {
                 log("⚠ Could not restart Dock", color: .logOrange)
             }
