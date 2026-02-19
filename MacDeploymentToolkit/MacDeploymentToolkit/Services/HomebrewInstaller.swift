@@ -142,18 +142,20 @@ class HomebrewInstaller {
                 process.environment = env
                 
                 // Stream stderr (where the installer writes progress) to debugLog
-                var allOutput = ""
-                var allError = ""
+                // Use thread-safe wrapper for mutable state shared with @Sendable handlers
+                let output = ThreadSafeString()
+                let error = ThreadSafeString()
+                let logCallback = self?.debugLog
                 
                 errorPipe.fileHandleForReading.readabilityHandler = { handle in
                     let data = handle.availableData
                     guard !data.isEmpty else { return }
                     if let line = String(data: data, encoding: .utf8) {
-                        allError += line
+                        error.append(line)
                         // Send meaningful lines to the deployment log
                         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
                         if !trimmed.isEmpty && !trimmed.contains("Password:") {
-                            self?.debugLog?("  \(trimmed)")
+                            logCallback?("  \(trimmed)")
                         }
                     }
                 }
@@ -162,10 +164,10 @@ class HomebrewInstaller {
                     let data = handle.availableData
                     guard !data.isEmpty else { return }
                     if let line = String(data: data, encoding: .utf8) {
-                        allOutput += line
+                        output.append(line)
                         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
                         if !trimmed.isEmpty {
-                            self?.debugLog?("  \(trimmed)")
+                            logCallback?("  \(trimmed)")
                         }
                     }
                 }
@@ -179,8 +181,8 @@ class HomebrewInstaller {
                     errorPipe.fileHandleForReading.readabilityHandler = nil
                     
                     continuation.resume(returning: ShellResult(
-                        output: allOutput,
-                        error: allError,
+                        output: output.value,
+                        error: error.value,
                         exitCode: process.terminationStatus
                     ))
                 } catch {
@@ -419,33 +421,35 @@ class HomebrewInstaller {
             process.environment = env
             
             // Stream output for real-time progress
-            var allOutput = ""
-            var allError = ""
+            // Use thread-safe wrapper for mutable state shared with @Sendable handlers
+            let allOutput = ThreadSafeString()
+            let allError = ThreadSafeString()
+            let logCallback = self?.debugLog
             
-            outputPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            outputPipe.fileHandleForReading.readabilityHandler = { handle in
                 let data = handle.availableData
                 guard !data.isEmpty else { return }
                 if let text = String(data: data, encoding: .utf8) {
-                    allOutput += text
+                    allOutput.append(text)
                     // Only log meaningful progress lines (skip noisy output)
                     for line in text.components(separatedBy: .newlines) {
                         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if Self.isProgressLine(trimmed) {
-                            self?.debugLog?("  \(trimmed)")
+                        if HomebrewInstaller.isProgressLine(trimmed) {
+                            logCallback?("  \(trimmed)")
                         }
                     }
                 }
             }
             
-            errorPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            errorPipe.fileHandleForReading.readabilityHandler = { handle in
                 let data = handle.availableData
                 guard !data.isEmpty else { return }
                 if let text = String(data: data, encoding: .utf8) {
-                    allError += text
+                    allError.append(text)
                     for line in text.components(separatedBy: .newlines) {
                         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if Self.isProgressLine(trimmed) {
-                            self?.debugLog?("  \(trimmed)")
+                        if HomebrewInstaller.isProgressLine(trimmed) {
+                            logCallback?("  \(trimmed)")
                         }
                     }
                 }
@@ -459,8 +463,8 @@ class HomebrewInstaller {
                 errorPipe.fileHandleForReading.readabilityHandler = nil
                 
                 continuation.resume(returning: ShellResult(
-                    output: allOutput,
-                    error: allError,
+                    output: allOutput.value,
+                    error: allError.value,
                     exitCode: process.terminationStatus
                 ))
             } catch {
@@ -661,6 +665,21 @@ class HomebrewInstaller {
 }
 
 // MARK: - Supporting Types
+
+/// Thread-safe mutable string for use in @Sendable closures (e.g., readabilityHandler).
+/// Uses a serial queue to synchronize reads and writes.
+final class ThreadSafeString: @unchecked Sendable {
+    private var _value = ""
+    private let queue = DispatchQueue(label: "com.mdt.threadsafe-string")
+    
+    var value: String {
+        queue.sync { _value }
+    }
+    
+    func append(_ text: String) {
+        queue.sync { _value += text }
+    }
+}
 
 struct ShellResult {
     let output: String
