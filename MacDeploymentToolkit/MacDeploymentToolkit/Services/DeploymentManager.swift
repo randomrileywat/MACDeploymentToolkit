@@ -48,6 +48,15 @@ class DeploymentManager: ObservableObject {
     private let directDownloadInstaller = DirectDownloadInstaller()
     private let systemStandardizer = SystemStandardizer()
     
+    // Wire up debug logging so HomebrewInstaller diagnostics appear in the deployment log
+    private func setupDebugLogging() {
+        homebrewInstaller.debugLog = { [weak self] message in
+            Task { @MainActor [weak self] in
+                self?.log(message, color: .logGray)
+            }
+        }
+    }
+    
     // Admin privileges
     private var sudoKeepaliveProcess: Process?
     private var adminPassword: String?
@@ -71,6 +80,9 @@ class DeploymentManager: ObservableObject {
         isComplete = false
         tasks.removeAll()
         logEntries.removeAll()
+        
+        // Wire up debug logging
+        setupDebugLogging()
         
         // Initialize tasks
         if macStandardization {

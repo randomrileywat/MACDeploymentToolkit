@@ -15,6 +15,9 @@ class HomebrewInstaller {
     private let brewPath = "/opt/homebrew/bin/brew"
     private let brewPathIntel = "/usr/local/bin/brew"
     
+    /// Optional debug log callback — set by DeploymentManager to pipe diagnostics into the deployment log
+    var debugLog: ((String) -> Void)?
+    
     /// Admin password set by DeploymentManager after initial prompt; used for sudo -S
     var adminPassword: String?
     
@@ -221,9 +224,16 @@ class HomebrewInstaller {
             command = "\(effectiveBrewPath) install \(packageId)"
         }
         
+        let fullCommand = commandWithPath(command)
+        debugLog?("[DEBUG] brew path: \(effectiveBrewPath)")
+        debugLog?("[DEBUG] full command: \(fullCommand)")
+        
         let result = try await runShellCommand(command)
         
         if result.exitCode != 0 {
+            debugLog?("[DEBUG] exit code: \(result.exitCode)")
+            debugLog?("[DEBUG] stdout: \(result.output)")
+            debugLog?("[DEBUG] stderr: \(result.error)")
             throw HomebrewError.packageInstallFailed(packageId, result.error)
         }
     }
