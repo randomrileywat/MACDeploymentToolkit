@@ -25,42 +25,35 @@ class HomebrewInstaller {
     private var cachedBrewPath: String?
     
     /// Returns the full absolute path to the brew binary.
-    /// Uses cached path if available, otherwise checks standard paths and `which brew`.
+    /// Uses cached path if available, otherwise defaults to ARM path.
+    /// The actual path discovery happens in isHomebrewInstalled() via shell.
     private var effectiveBrewPath: String {
         if let cached = cachedBrewPath {
             return cached
         }
-        if FileManager.default.fileExists(atPath: brewPath) {
-            cachedBrewPath = brewPath
-            return brewPath
-        } else if FileManager.default.fileExists(atPath: brewPathIntel) {
-            cachedBrewPath = brewPathIntel
-            return brewPathIntel
-        }
-        // Should not reach here if isHomebrewInstalled() was called first
-        return brewPath // Default to ARM path rather than bare "brew"
+        // Default to ARM path — isHomebrewInstalled() will update this
+        // via shell-based discovery which isn't blocked by sandbox
+        return brewPath
     }
     
     // MARK: - Homebrew Management
     
     /// Check if Homebrew is installed, caching the resolved path for later use.
-    /// Checks standard paths first, then falls back to `which brew` via shell.
+    /// Uses shell-based checks instead of FileManager because the app sandbox
+    /// can block FileManager.fileExists() for paths like /opt/homebrew/bin/brew.
     func isHomebrewInstalled() async -> Bool {
-        // Check standard ARM path
-        if FileManager.default.fileExists(atPath: brewPath) {
-            cachedBrewPath = brewPath
-            return true
-        }
-        // Check standard Intel path
-        if FileManager.default.fileExists(atPath: brewPathIntel) {
-            cachedBrewPath = brewPathIntel
-            return true
-        }
-        // Fallback: find brew via shell (handles non-standard installations)
+        // Use shell `test -x` to check if brew exists and is executable.
+        // This works even when FileManager is blocked by the app sandbox.
+        // Include BOTH ARM and Intel paths in the shell PATH to find brew.
+        let checkScript = """
+        if [ -x /opt/homebrew/bin/brew ]; then echo /opt/homebrew/bin/brew; \
+        elif [ -x /usr/local/bin/brew ]; then echo /usr/local/bin/brew; \
+        else exit 1; fi
+        """
         do {
-            let result = try await runShellCommand("which brew 2>/dev/null || command -v brew 2>/dev/null")
+            let result = try await runShellCommandRaw(checkScript)
             let path = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !path.isEmpty {
+            if result.exitCode == 0 && path.hasPrefix("/") {
                 cachedBrewPath = path
                 return true
             }
@@ -260,6 +253,40 @@ class HomebrewInstaller {
     
     // MARK: - Shell Command Execution
     
+    /// Runs a raw shell command WITHOUT injecting Homebrew PATH.
+    /// Used by isHomebrewInstalled() to avoid circular dependency with commandWithPath.
+    private func runShellCommandRaw(_ command: String) async throws -> ShellResult {
+        return try await withCheckedThrowingContinuation { continuation in
+            let process = Process()
+            let outputPipe = Pipe()
+            let errorPipe = Pipe()
+            
+            process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            process.arguments = ["-c", command]
+            process.standardOutput = outputPipe
+            process.standardError = errorPipe
+            
+            do {
+                try process.run()
+                process.waitUntilExit()
+                
+                let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+                let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+                
+                let output = String(data: outputData, encoding: .utf8) ?? ""
+                let error = String(data: errorData, encoding: .utf8) ?? ""
+                
+                continuation.resume(returning: ShellResult(
+                    output: output,
+                    error: error,
+                    exitCode: process.terminationStatus
+                ))
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
+    }
+    
     private func runShellCommand(_ command: String) async throws -> ShellResult {
         // Inject Homebrew PATH into the command string itself so it survives
         // all subprocess spawning (brew's Ruby scripts call `brew` by bare name).
@@ -282,9 +309,9 @@ class HomebrewInstaller {
             var env = ProcessInfo.processInfo.environment
             let homebrewPaths = "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin"
             env["PATH"] = "\(homebrewPaths):/usr/bin:/bin:/usr/sbin:/sbin:\(env["PATH"] ?? "")"
-            env["HOMEBREW_PREFIX"] = FileManager.default.fileExists(atPath: "/opt/homebrew/bin/brew") ? "/opt/homebrew" : "/usr/local"
-            env["HOMEBREW_CELLAR"] = "\(env["HOMEBREW_PREFIX"] ?? "/opt/homebrew")/Cellar"
-            env["HOMEBREW_REPOSITORY"] = env["HOMEBREW_PREFIX"]
+            env["HOMEBREW_PREFIX"] = "/opt/homebrew"
+            env["HOMEBREW_CELLAR"] = "/opt/homebrew/Cellar"
+            env["HOMEBREW_REPOSITORY"] = "/opt/homebrew"
             process.environment = env
             
             do {
@@ -309,17 +336,9 @@ class HomebrewInstaller {
     }
     
     /// Injects the full Homebrew environment into a command string as a single-line prefix.
+    /// Always includes BOTH ARM and Intel paths — no FileManager checks (sandbox-safe).
     private func commandWithPath(_ command: String) -> String {
-        let brewPrefix: String
-        let brewBinPaths: String
-        if FileManager.default.fileExists(atPath: brewPath) {
-            brewPrefix = "/opt/homebrew"
-            brewBinPaths = "/opt/homebrew/bin:/opt/homebrew/sbin"
-        } else {
-            brewPrefix = "/usr/local"
-            brewBinPaths = "/usr/local/bin:/usr/local/sbin"
-        }
-        return "export HOMEBREW_PREFIX=\(brewPrefix) HOMEBREW_CELLAR=\(brewPrefix)/Cellar HOMEBREW_REPOSITORY=\(brewPrefix) PATH=\(brewBinPaths):/usr/bin:/bin:/usr/sbin:/sbin:$PATH && \(command)"
+        return "export HOMEBREW_PREFIX=/opt/homebrew HOMEBREW_CELLAR=/opt/homebrew/Cellar HOMEBREW_REPOSITORY=/opt/homebrew PATH=/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH && \(command)"
     }
     
     private func runShellCommandWithElevation(_ command: String) async throws -> ShellResult {
