@@ -121,8 +121,9 @@ class HomebrewInstaller {
         """
         
         // Run with streaming output so progress appears in the deployment log
+        let logCallback = debugLog
         let result = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<ShellResult, Error>) in
-            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            DispatchQueue.global(qos: .userInitiated).async {
                 let process = Process()
                 let outputPipe = Pipe()
                 let errorPipe = Pipe()
@@ -145,7 +146,6 @@ class HomebrewInstaller {
                 // Use thread-safe wrapper for mutable state shared with @Sendable handlers
                 let output = ThreadSafeString()
                 let error = ThreadSafeString()
-                let logCallback = self?.debugLog
                 
                 errorPipe.fileHandleForReading.readabilityHandler = { handle in
                     let data = handle.availableData
