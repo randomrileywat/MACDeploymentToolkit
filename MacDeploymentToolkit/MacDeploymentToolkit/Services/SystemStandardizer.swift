@@ -302,7 +302,17 @@ class SystemStandardizer {
             .appendingPathComponent("Library/Application Support/MacDeploymentToolkit")
         try? fileManager.createDirectory(at: wallpaperDir, withIntermediateDirectories: true)
         
-        let wallpaperPath = wallpaperDir.appendingPathComponent("custom_wallpaper.png")
+        // Remove any old wallpapers so they don't pile up
+        if let existing = try? fileManager.contentsOfDirectory(at: wallpaperDir, includingPropertiesForKeys: nil) {
+            for file in existing where file.lastPathComponent.hasPrefix("wallpaper_") {
+                try? fileManager.removeItem(at: file)
+            }
+        }
+        
+        // Use a unique filename each time so macOS doesn't serve a cached version
+        // (setDesktopImageURL ignores file changes when the URL is identical)
+        let timestamp = Int(Date().timeIntervalSince1970)
+        let wallpaperPath = wallpaperDir.appendingPathComponent("wallpaper_\(timestamp).png")
         
         let destination = CGImageDestinationCreateWithURL(wallpaperPath as CFURL, kUTTypePNG, 1, nil)!
         CGImageDestinationAddImage(destination, cgImage, nil)
