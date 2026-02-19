@@ -236,12 +236,16 @@ class DeploymentManager: ObservableObject {
             log("")
         }
         
-        // Step 4: Pin newly installed apps to the Dock
-        if !newlyInstalledApps.isEmpty {
+        // Step 4: Pin all successfully installed/detected apps to the Dock
+        let successfulApps = applications.filter { app in
+            tasks.first(where: { $0.name == app.name })?.status == .success
+        }
+        
+        if !successfulApps.isEmpty {
             log("=== Pinning Applications to Dock ===", color: .logCyan)
             currentStatus = "Pinning apps to Dock..."
             
-            for app in newlyInstalledApps {
+            for app in successfulApps {
                 if let appPath = findInstalledAppPath(app) {
                     do {
                         try await systemStandardizer.addAppToDock(appPath: appPath)
