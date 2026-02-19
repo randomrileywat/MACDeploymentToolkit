@@ -166,26 +166,32 @@ class DeploymentManager: ObservableObject {
         
         if needsHomebrew {
             log("Checking for Homebrew availability...", color: .logYellow)
+            currentStatus = "Checking for Homebrew..."
             
-            let hasHomebrew = await homebrewInstaller.isHomebrewInstalled()
+            var hasHomebrew = await homebrewInstaller.isHomebrewInstalled()
             
             if !hasHomebrew {
-                log("Homebrew not found. Installing...", color: .logYellow)
+                log("Homebrew not found. Installing (this may take a few minutes)...", color: .logYellow)
+                currentStatus = "Installing Homebrew..."
                 
                 do {
                     try await homebrewInstaller.installHomebrew()
                     log("✓ Homebrew installed successfully", color: .logGreen)
+                    hasHomebrew = true
                 } catch {
                     log("✗ Failed to install Homebrew: \(error.localizedDescription)", color: .logRed)
-                    log("Some applications may not be installable without Homebrew", color: .logOrange)
+                    log("Homebrew apps will be skipped. Install Homebrew manually and retry.", color: .logOrange)
                 }
             } else {
                 log("✓ Homebrew is available", color: .logGreen)
             }
             
-            // Update Homebrew
-            log("Updating Homebrew...", color: .logYellow)
-            await homebrewInstaller.updateHomebrew()
+            if hasHomebrew {
+                // Update Homebrew
+                log("Updating Homebrew...", color: .logYellow)
+                currentStatus = "Updating Homebrew..."
+                await homebrewInstaller.updateHomebrew()
+            }
             log("")
         }
         

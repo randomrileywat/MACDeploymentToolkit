@@ -61,18 +61,72 @@ class HomebrewInstaller {
         return false
     }
     
-    /// Install Homebrew
+    /// Install Homebrew non-interactively using the stored admin password.
+    /// Sets NONINTERACTIVE=1 so the official install script doesn't prompt,
+    /// and pipes the admin password to sudo -S for privilege escalation.
     func installHomebrew() async throws {
-        let installScript = "/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+        guard let password = adminPassword else {
+            throw HomebrewError.installationFailed("No admin password available. Cannot install Homebrew non-interactively.")
+        }
         
-        // Note: Homebrew installation requires user interaction for password
-        // In a deployment scenario, this would need to be handled differently
-        // For now, we'll attempt the installation and let the user provide the password
+        // The official Homebrew installer supports NONINTERACTIVE=1 to skip prompts.
+        // We pipe the admin password to sudo -S via the installer's internal sudo calls.
+        // CI=1 also suppresses prompts and is the documented env var for CI systems.
+        let installCommand = "NONINTERACTIVE=1 CI=1 /bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
         
-        let result = try await runShellCommand(installScript)
+        // Run the installer with the admin password available via sudo -S
+        let result = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<ShellResult, Error>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let process = Process()
+                let inputPipe = Pipe()
+                let outputPipe = Pipe()
+                let errorPipe = Pipe()
+                
+                process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+                process.arguments = ["-c", installCommand]
+                process.standardInput = inputPipe
+                process.standardOutput = outputPipe
+                process.standardError = errorPipe
+                
+                // Set environment so sudo inside the script can read password from stdin
+                var env = ProcessInfo.processInfo.environment
+                env["NONINTERACTIVE"] = "1"
+                env["CI"] = "1"
+                process.environment = env
+                
+                do {
+                    try process.run()
+                    
+                    // The installer calls sudo internally; pipe password for those calls
+                    let passwordData = (password + "\n").data(using: .utf8)!
+                    inputPipe.fileHandleForWriting.write(passwordData)
+                    inputPipe.fileHandleForWriting.closeFile()
+                    
+                    process.waitUntilExit()
+                    
+                    let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                    let error = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                    
+                    continuation.resume(returning: ShellResult(
+                        output: output,
+                        error: error,
+                        exitCode: process.terminationStatus
+                    ))
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
         
         if result.exitCode != 0 {
-            throw HomebrewError.installationFailed(result.error)
+            throw HomebrewError.installationFailed("\(result.error)\n\(result.output)")
+        }
+        
+        // After installing, re-detect the brew path so subsequent commands work
+        cachedBrewPath = nil
+        let found = await isHomebrewInstalled()
+        if !found {
+            throw HomebrewError.installationFailed("Homebrew installer completed but brew binary not found at expected paths.")
         }
     }
     
