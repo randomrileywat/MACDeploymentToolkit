@@ -262,29 +262,21 @@ class HomebrewInstaller {
     // MARK: - Shell Command Execution
     
     private func runShellCommand(_ command: String) async throws -> ShellResult {
+        // Inject Homebrew PATH into the command string itself so it survives
+        // all subprocess spawning (brew's Ruby scripts call `brew` by bare name).
+        // Setting process.environment alone is not enough because child processes
+        // may spawn their own shells that don't inherit it.
+        let fullCommand = commandWithPath(command)
+        
         return try await withCheckedThrowingContinuation { continuation in
             let process = Process()
             let outputPipe = Pipe()
             let errorPipe = Pipe()
             
             process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            // Use login shell (-l) so that the user's .zprofile is sourced.
-            // This ensures Homebrew is in PATH for brew's own subprocesses
-            // (e.g., Ruby scripts that call `brew` by bare name during cask installs).
-            process.arguments = ["-l", "-c", command]
+            process.arguments = ["-c", fullCommand]
             process.standardOutput = outputPipe
             process.standardError = errorPipe
-            process.environment = ProcessInfo.processInfo.environment
-            
-            // Add Homebrew paths to PATH if needed
-            var env = process.environment ?? [:]
-            let homebrewPaths = "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin"
-            if let existingPath = env["PATH"] {
-                env["PATH"] = "\(homebrewPaths):\(existingPath)"
-            } else {
-                env["PATH"] = homebrewPaths
-            }
-            process.environment = env
             
             do {
                 try process.run()
