@@ -55,6 +55,11 @@ class DeploymentManager: ObservableObject {
                 self?.log(message, color: .logGray)
             }
         }
+        systemStandardizer.debugLog = { [weak self] message in
+            Task { @MainActor [weak self] in
+                self?.log(message, color: .logGray)
+            }
+        }
     }
     
     // Admin privileges

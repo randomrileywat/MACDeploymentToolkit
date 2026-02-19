@@ -19,6 +19,9 @@ class SystemStandardizer {
     /// Admin password set by DeploymentManager after initial prompt; used for sudo -S
     var adminPassword: String?
     
+    /// Optional debug log callback — set by DeploymentManager to surface dock diagnostics
+    var debugLog: ((String) -> Void)?
+    
     // MARK: - Main Standardization Entry Point
     
     /// Apply all standardization settings
@@ -126,15 +129,22 @@ class SystemStandardizer {
     /// Returns the .app paths for entries whose names match the catalog.
     /// Must be called BEFORE clearing the dock with `defaults delete`.
     private func readCurrentDockAppPaths(preserving catalogNames: Set<String>) -> [String] {
-        guard !catalogNames.isEmpty else { return [] }
+        guard !catalogNames.isEmpty else {
+            debugLog?("  Dock preservation: no catalog names provided")
+            return []
+        }
         
         let plistPath = fileManager.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Preferences/com.apple.dock.plist").path
         
         guard let dockDict = NSDictionary(contentsOfFile: plistPath),
               let persistentApps = dockDict["persistent-apps"] as? [[String: Any]] else {
+            debugLog?("  Dock preservation: could not read plist at \(plistPath)")
             return []
         }
+        
+        debugLog?("  Dock preservation: found \(persistentApps.count) current dock entries")
+        debugLog?("  Catalog names to preserve: \(catalogNames.sorted().joined(separator: ", "))")
         
         let catalogNamesLower = Set(catalogNames.map { $0.lowercased() })
         var preserved: [String] = []
@@ -146,7 +156,15 @@ class SystemStandardizer {
             guard let fileData = tileData["file-data"] as? [String: Any],
                   let urlString = fileData["_CFURLString"] as? String else { continue }
             
-            let cleanPath = urlString.hasSuffix("/") ? String(urlString.dropLast()) : urlString
+            // Convert file:// URLs to POSIX paths — _CFURLStringType 15 = file URL, 0 = POSIX
+            let posixPath: String
+            if let url = URL(string: urlString), url.scheme == "file" {
+                posixPath = url.path  // file:///Applications/Foo.app/ → /Applications/Foo.app
+            } else {
+                posixPath = urlString
+            }
+            // Strip trailing slash if present
+            let cleanPath = posixPath.hasSuffix("/") ? String(posixPath.dropLast()) : posixPath
             
             // Try to match by file-label first, then by path
             let label = (tileData["file-label"] as? String ?? "").lowercased()
@@ -159,11 +177,15 @@ class SystemStandardizer {
             if catalogNamesLower.contains(where: { nameToCheck.contains($0) || $0.contains(nameToCheck) }) {
                 // Verify the app still exists on disk before preserving
                 if fileManager.fileExists(atPath: cleanPath) {
+                    debugLog?("  Dock preservation: keeping \(nameToCheck) → \(cleanPath)")
                     preserved.append(cleanPath)
+                } else {
+                    debugLog?("  Dock preservation: matched \(nameToCheck) but path missing: \(cleanPath)")
                 }
             }
         }
         
+        debugLog?("  Dock preservation: \(preserved.count) apps to re-add")
         return preserved
     }
     
