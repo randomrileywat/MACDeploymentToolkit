@@ -388,13 +388,13 @@ struct ContentView: View {
         VStack(spacing: 0) {
             // Summary Panel
             deploymentSummaryPanel
-                .frame(height: 320)
+                .frame(maxHeight: .infinity)
             
             // Progress Bar - only show while actively deploying (not after completion)
             if deploymentManager.isDeploying && !deploymentManager.isComplete {
                 ProgressView()
                     .progressViewStyle(.linear)
-                    .padding(.horizontal, 20)
+                    .padding(.horizontal, 16)
                     .padding(.vertical, 10)
             }
             
@@ -420,7 +420,8 @@ struct ContentView: View {
                 }
             }
         }
-        .padding(12)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
         .background(Color(NSColor.textBackgroundColor))
         .cornerRadius(8)
         .padding(.horizontal, 16)

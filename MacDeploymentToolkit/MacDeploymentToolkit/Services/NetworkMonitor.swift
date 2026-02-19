@@ -53,8 +53,8 @@ class NetworkMonitor: ObservableObject {
     }
     
     /// Static connectivity check using SystemConfiguration
-    /// Static to avoid @MainActor isolation issues when called from Timer closures
-    static func checkConnectivity() -> Bool {
+    /// nonisolated + static to avoid @MainActor isolation issues when called from Timer closures
+    nonisolated static func checkConnectivity() -> Bool {
         var zeroAddress = sockaddr_in()
         zeroAddress.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
         zeroAddress.sin_family = sa_family_t(AF_INET)
