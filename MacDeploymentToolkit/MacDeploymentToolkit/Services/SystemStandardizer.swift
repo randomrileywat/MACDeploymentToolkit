@@ -116,47 +116,74 @@ class SystemStandardizer {
     private func getCurrentDockAppPaths(preserving catalogNames: Set<String>) async -> [String] {
         guard !catalogNames.isEmpty else { return [] }
         
-        // Use PlistBuddy to read persistent-apps entries
-        let countResult = try? await runShellCommand("/usr/libexec/PlistBuddy -c 'Print :persistent-apps' ~/Library/Preferences/com.apple.dock.plist 2>/dev/null | grep -c 'CFURLString' || echo 0")
+        // Export the dock plist as XML for reliable parsing
+        let readResult = try? await runShellCommand("plutil -convert xml1 -o - ~/Library/Preferences/com.apple.dock.plist 2>/dev/null")
+        guard let output = readResult?.output, !output.isEmpty else { return [] }
         
-        // Read all app paths from the dock plist via defaults
-        let readResult = try? await runShellCommand("defaults read com.apple.dock persistent-apps 2>/dev/null | grep '_CFURLString' | sed 's/.*= \"\\(.*\\)\";/\\1/' | sed 's/.*= \\(.*\\);/\\1/'")
-        guard let output = readResult?.output, !output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return []
-        }
+        // Extract all _CFURLString values (app paths) from the XML
+        // Pattern: <key>_CFURLString</key>\n\t*<string>...</string>
+        let allPaths = extractCFURLStrings(from: output)
         
         let catalogNamesLower = Set(catalogNames.map { $0.lowercased() })
         var preserved: [String] = []
         
-        for line in output.components(separatedBy: .newlines) {
-            let path = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                .trimmingCharacters(in: CharacterSet(charactersIn: "\";"))
-            guard !path.isEmpty, path.hasSuffix(".app") else { continue }
+        for path in allPaths {
+            guard path.hasSuffix(".app") || path.hasSuffix(".app/") else { continue }
             
-            let appName = (path as NSString).lastPathComponent
+            let cleanPath = path.hasSuffix("/") ? String(path.dropLast()) : path
+            let appName = (cleanPath as NSString).lastPathComponent
                 .replacingOccurrences(of: ".app", with: "")
                 .lowercased()
             
             // Keep this dock entry if its name matches any catalog app
             if catalogNamesLower.contains(where: { appName.contains($0) || $0.contains(appName) }) {
-                preserved.append(path)
+                preserved.append(cleanPath)
             }
         }
         
         return preserved
     }
     
+    /// Extract _CFURLString values from XML plist data
+    private func extractCFURLStrings(from xml: String) -> [String] {
+        var results: [String] = []
+        let lines = xml.components(separatedBy: .newlines)
+        for (i, line) in lines.enumerated() {
+            if line.trimmingCharacters(in: .whitespaces).contains("<key>_CFURLString</key>") {
+                // Next line should have the <string>value</string>
+                if i + 1 < lines.count {
+                    let valueLine = lines[i + 1].trimmingCharacters(in: .whitespaces)
+                    if let start = valueLine.range(of: "<string>"),
+                       let end = valueLine.range(of: "</string>") {
+                        let value = String(valueLine[start.upperBound..<end.lowerBound])
+                        results.append(value)
+                    }
+                }
+            }
+        }
+        return results
+    }
+    
     /// Returns the set of app labels currently in the dock
     func getCurrentDockAppLabels() async -> Set<String> {
-        let readResult = try? await runShellCommand("defaults read com.apple.dock persistent-apps 2>/dev/null | grep 'file-label' | sed 's/.*= \"\\(.*\\)\";/\\1/' | sed 's/.*= \\(.*\\);/\\1/'")
-        guard let output = readResult?.output else { return [] }
+        let readResult = try? await runShellCommand("plutil -convert xml1 -o - ~/Library/Preferences/com.apple.dock.plist 2>/dev/null")
+        guard let output = readResult?.output, !output.isEmpty else { return [] }
         
+        // Extract file-label values from the XML
         var labels = Set<String>()
-        for line in output.components(separatedBy: .newlines) {
-            let label = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                .trimmingCharacters(in: CharacterSet(charactersIn: "\";"))
-            if !label.isEmpty {
-                labels.insert(label.lowercased())
+        let lines = output.components(separatedBy: .newlines)
+        for (i, line) in lines.enumerated() {
+            if line.trimmingCharacters(in: .whitespaces).contains("<key>file-label</key>") {
+                if i + 1 < lines.count {
+                    let valueLine = lines[i + 1].trimmingCharacters(in: .whitespaces)
+                    if let start = valueLine.range(of: "<string>"),
+                       let end = valueLine.range(of: "</string>") {
+                        let label = String(valueLine[start.upperBound..<end.lowerBound])
+                        if !label.isEmpty {
+                            labels.insert(label.lowercased())
+                        }
+                    }
+                }
             }
         }
         return labels
