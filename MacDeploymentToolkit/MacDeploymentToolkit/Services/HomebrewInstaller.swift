@@ -393,12 +393,15 @@ class HomebrewInstaller {
     /// Runs the brew binary DIRECTLY as a process — no shell, no PATH lookup.
     /// Streams output to debugLog in real-time for progress visibility.
     private func runBrewCommand(_ arguments: [String]) async throws -> ShellResult {
-        return try await withCheckedThrowingContinuation { [weak self] continuation in
+        // Capture everything we need from self BEFORE the @Sendable continuation closure
+        let brewPath = effectiveBrewPath
+        let askpass = getOrCreateAskpassScript()
+        let logCallback = debugLog
+        
+        return try await withCheckedThrowingContinuation { continuation in
             let process = Process()
             let outputPipe = Pipe()
             let errorPipe = Pipe()
-            
-            let brewPath = self?.effectiveBrewPath ?? "/opt/homebrew/bin/brew"
             
             // Execute brew directly — bypasses zsh, PATH, and shell entirely
             process.executableURL = URL(fileURLWithPath: brewPath)
@@ -415,7 +418,7 @@ class HomebrewInstaller {
             env["PATH"] = "\(homebrewPrefix)/bin:\(homebrewPrefix)/sbin:/usr/bin:/bin:/usr/sbin:/sbin:\(env["PATH"] ?? "")"
             // Provide askpass helper so brew's internal sudo calls (e.g., cask pkg
             // installers like Dante Controller) can authenticate without a terminal
-            if let askpass = self?.getOrCreateAskpassScript() {
+            if let askpass = askpass {
                 env["SUDO_ASKPASS"] = askpass
             }
             process.environment = env
@@ -424,7 +427,6 @@ class HomebrewInstaller {
             // Use thread-safe wrapper for mutable state shared with @Sendable handlers
             let allOutput = ThreadSafeString()
             let allError = ThreadSafeString()
-            let logCallback = self?.debugLog
             
             outputPipe.fileHandleForReading.readabilityHandler = { handle in
                 let data = handle.availableData
