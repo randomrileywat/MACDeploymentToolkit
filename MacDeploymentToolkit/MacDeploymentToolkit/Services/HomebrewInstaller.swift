@@ -79,7 +79,7 @@ class HomebrewInstaller {
     /// Update Homebrew sources
     func updateHomebrew() async {
         do {
-            _ = try await runShellCommand("\(effectiveBrewPath) update")
+            _ = try await runShellCommand("brew update")
         } catch {
             // Non-fatal, continue with existing catalog
             print("Warning: Failed to update Homebrew: \(error)")
@@ -189,9 +189,9 @@ class HomebrewInstaller {
             let command: String
             switch type {
             case .cask:
-                command = "\(effectiveBrewPath) list --cask \(packageId)"
+                command = "brew list --cask \(packageId)"
             case .formula:
-                command = "\(effectiveBrewPath) list \(packageId)"
+                command = "brew list \(packageId)"
             }
             
             let result = try await runShellCommand(command)
@@ -206,16 +206,16 @@ class HomebrewInstaller {
         let command: String
         switch type {
         case .cask:
-            command = "\(effectiveBrewPath) install --cask --force \(packageId)"
+            command = "brew install --cask --force \(packageId)"
         case .formula:
-            command = "\(effectiveBrewPath) install \(packageId)"
+            command = "brew install \(packageId)"
         }
         
         let result = try await runShellCommand(command)
         
         if result.exitCode != 0 {
             // Include full diagnostics in the error so they appear in the deployment log
-            let diagnostic = "\(result.error)\n[cmd: \(command)]\n[stdout: \(result.output.prefix(300))]\n[brew: \(effectiveBrewPath)]"
+            let diagnostic = "\(result.error)\n[cmd: \(command)]\n[stdout: \(result.output.prefix(300))]\n[brew resolved: \(effectiveBrewPath)]"
             throw HomebrewError.packageInstallFailed(packageId, diagnostic)
         }
     }
@@ -225,9 +225,9 @@ class HomebrewInstaller {
         let command: String
         switch type {
         case .cask:
-            command = "\(effectiveBrewPath) uninstall --cask \(packageId)"
+            command = "brew uninstall --cask \(packageId)"
         case .formula:
-            command = "\(effectiveBrewPath) uninstall \(packageId)"
+            command = "brew uninstall \(packageId)"
         }
         
         let result = try await runShellCommand(command)
@@ -242,9 +242,9 @@ class HomebrewInstaller {
         let command: String
         switch type {
         case .cask:
-            command = "\(effectiveBrewPath) info --cask \(packageId)"
+            command = "brew info --cask \(packageId)"
         case .formula:
-            command = "\(effectiveBrewPath) info \(packageId)"
+            command = "brew info \(packageId)"
         }
         
         let result = try await runShellCommand(command)
