@@ -210,31 +210,67 @@ class HomebrewInstaller {
     
     /// Install a package via Homebrew
     func install(packageId: String, type: InstallMethod.HomebrewType) async throws {
-        let command: String
+        let arguments: [String]
         switch type {
         case .cask:
-            // Run brew as the NORMAL USER (not under sudo).
-            // Homebrew does NOT like running as root and will fail or misbehave.
-            // Homebrew handles its own privilege escalation internally where needed
-            // (e.g., writing to /Applications). The sudo keepalive started by
-            // DeploymentManager ensures Homebrew's internal sudo calls succeed
-            // without prompting.
-            command = "\(effectiveBrewPath) install --cask --force \(packageId)"
+            arguments = ["install", "--cask", "--force", packageId]
         case .formula:
-            command = "\(effectiveBrewPath) install \(packageId)"
+            arguments = ["install", packageId]
         }
         
-        let fullCommand = commandWithPath(command)
-        debugLog?("[DEBUG] brew path: \(effectiveBrewPath)")
-        debugLog?("[DEBUG] full command: \(fullCommand)")
+        // Run the brew binary DIRECTLY as the process executable.
+        // This avoids all zsh shell PATH issues — brew's own shell script wrapper
+        // sets up HOMEBREW_BREW_FILE and other internal env vars correctly.
+        let brewBinary = effectiveBrewPath
         
-        let result = try await runShellCommand(command)
+        let result: ShellResult = try await withCheckedThrowingContinuation { continuation in
+            let process = Process()
+            let outputPipe = Pipe()
+            let errorPipe = Pipe()
+            
+            process.executableURL = URL(fileURLWithPath: brewBinary)
+            process.arguments = arguments
+            process.standardOutput = outputPipe
+            process.standardError = errorPipe
+            
+            // Set up comprehensive environment for brew and its subprocesses
+            var env = ProcessInfo.processInfo.environment
+            let brewPrefix = brewBinary.contains("/opt/homebrew") ? "/opt/homebrew" : "/usr/local"
+            let brewBinPaths = "\(brewPrefix)/bin:\(brewPrefix)/sbin"
+            env["PATH"] = "\(brewBinPaths):/usr/bin:/bin:/usr/sbin:/sbin:\(env["PATH"] ?? "")"
+            env["HOMEBREW_PREFIX"] = brewPrefix
+            env["HOMEBREW_CELLAR"] = "\(brewPrefix)/Cellar"
+            env["HOMEBREW_REPOSITORY"] = brewPrefix
+            process.environment = env
+            
+            do {
+                try process.run()
+                process.waitUntilExit()
+                
+                let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+                let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+                
+                let output = String(data: outputData, encoding: .utf8) ?? ""
+                let error = String(data: errorData, encoding: .utf8) ?? ""
+                
+                continuation.resume(returning: ShellResult(
+                    output: output,
+                    error: error,
+                    exitCode: process.terminationStatus
+                ))
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
         
         if result.exitCode != 0 {
-            debugLog?("[DEBUG] exit code: \(result.exitCode)")
-            debugLog?("[DEBUG] stdout: \(result.output)")
-            debugLog?("[DEBUG] stderr: \(result.error)")
-            throw HomebrewError.packageInstallFailed(packageId, result.error)
+            // Include full diagnostic info in the error message
+            let diagnostic = """
+            \(result.error)
+            [brew binary: \(brewBinary)]
+            [stdout: \(result.output.prefix(200))]
+            """
+            throw HomebrewError.packageInstallFailed(packageId, diagnostic)
         }
     }
     
