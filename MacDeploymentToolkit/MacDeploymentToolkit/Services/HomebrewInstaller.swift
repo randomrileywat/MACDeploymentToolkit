@@ -112,13 +112,19 @@ class HomebrewInstaller {
         "keka": "Keka",
         "ndi-tools": "NDI Tools",
         "wireshark": "Wireshark",
+        "wireshark-app": "Wireshark",
         "resolume-arena": "Resolume Arena",
         "blackmagic-disk-speed-test": "Blackmagic Disk Speed Test",
         "qlab": "QLab",
         "companion": "Companion",
         "touchosc": "TouchOSC",
         "dante-controller": "Dante Controller",
-        "dante-virtual-soundcard": "Dante Virtual Soundcard"
+        "dante-virtual-soundcard": "Dante Virtual Soundcard",
+        "propresenter": "ProPresenter",
+        "reaper": "REAPER",
+        "waves-central": "Waves Central",
+        "wireless-workbench": "Wireless Workbench",
+        "packetsender": "Packet Sender"
     ]
     
     /// Check if a package is installed (checks /Applications first, then Homebrew)
@@ -270,14 +276,20 @@ class HomebrewInstaller {
         }
     }
     
+    /// Injects Homebrew PATH into a command string so it survives sudo/osascript environment resets
+    private func commandWithPath(_ command: String) -> String {
+        return "export PATH=/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:$PATH && \(command)"
+    }
+    
     private func runShellCommandWithElevation(_ command: String) async throws -> ShellResult {
+        // Inject PATH into the command itself so it survives sudo/osascript environment resets
+        let fullCommand = commandWithPath(command)
+        
         // Use stored admin password with sudo -S to avoid repeated password prompts
-        // Falls back to osascript dialog if no password is stored
         guard let password = adminPassword else {
             // Fallback: use osascript with administrator privileges (will prompt)
-            let script = """
-            do shell script "\(command.replacingOccurrences(of: "\"", with: "\\\""))" with administrator privileges
-            """
+            let escapedCmd = fullCommand.replacingOccurrences(of: "\"", with: "\\\"")
+            let script = "do shell script \"\(escapedCmd)\" with administrator privileges"
             return try await withCheckedThrowingContinuation { continuation in
                 DispatchQueue.global(qos: .userInitiated).async {
                     let process = Process()
@@ -287,14 +299,6 @@ class HomebrewInstaller {
                     process.arguments = ["-e", script]
                     process.standardOutput = outputPipe
                     process.standardError = errorPipe
-                    var env = ProcessInfo.processInfo.environment
-                    let homebrewPaths = "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin"
-                    if let existingPath = env["PATH"] {
-                        env["PATH"] = "\(homebrewPaths):\(existingPath)"
-                    } else {
-                        env["PATH"] = homebrewPaths
-                    }
-                    process.environment = env
                     do {
                         try process.run()
                         process.waitUntilExit()
@@ -317,25 +321,14 @@ class HomebrewInstaller {
                 let errorPipe = Pipe()
                 
                 process.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
-                process.arguments = ["-S", "/bin/zsh", "-c", command]
+                process.arguments = ["-S", "/bin/zsh", "-c", fullCommand]
                 process.standardInput = inputPipe
                 process.standardOutput = outputPipe
                 process.standardError = errorPipe
                 
-                // Add Homebrew paths to environment
-                var env = ProcessInfo.processInfo.environment
-                let homebrewPaths = "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin"
-                if let existingPath = env["PATH"] {
-                    env["PATH"] = "\(homebrewPaths):\(existingPath)"
-                } else {
-                    env["PATH"] = homebrewPaths
-                }
-                process.environment = env
-                
                 do {
                     try process.run()
                     
-                    // Write password to stdin for sudo -S
                     let passwordData = (password + "\n").data(using: .utf8)!
                     inputPipe.fileHandleForWriting.write(passwordData)
                     inputPipe.fileHandleForWriting.closeFile()

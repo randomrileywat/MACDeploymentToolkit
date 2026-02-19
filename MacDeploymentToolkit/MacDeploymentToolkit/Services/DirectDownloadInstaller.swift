@@ -118,34 +118,68 @@ class DirectDownloadInstaller {
             }
         }
         
-        // Find .app in mounted volume
-        let appBundle = try findAppBundle(in: mountPoint, name: appName)
+        // Look for .app or .pkg in the mounted volume
+        let contents = try fileManager.contentsOfDirectory(at: mountPoint, includingPropertiesForKeys: nil)
         
-        // Copy to /Applications
-        let destination = URL(fileURLWithPath: "/Applications").appendingPathComponent(appBundle.lastPathComponent)
-        
-        // Remove existing app if present
-        if fileManager.fileExists(atPath: destination.path) {
-            try fileManager.removeItem(at: destination)
+        // Check for .app first
+        if let appBundle = contents.first(where: { $0.pathExtension == "app" }) {
+            let destination = URL(fileURLWithPath: "/Applications").appendingPathComponent(appBundle.lastPathComponent)
+            if fileManager.fileExists(atPath: destination.path) {
+                try fileManager.removeItem(at: destination)
+            }
+            try fileManager.copyItem(at: appBundle, to: destination)
+            return
         }
         
-        try fileManager.copyItem(at: appBundle, to: destination)
+        // Check for .pkg installer (common for Blackmagic, etc.)
+        if let pkgInstaller = contents.first(where: { $0.pathExtension == "pkg" }) {
+            try await installFromPKG(pkgInstaller)
+            return
+        }
+        
+        // Check subdirectories for .pkg files (some DMGs nest them)
+        for item in contents {
+            var isDir: ObjCBool = false
+            if fileManager.fileExists(atPath: item.path, isDirectory: &isDir), isDir.boolValue {
+                if let subContents = try? fileManager.contentsOfDirectory(at: item, includingPropertiesForKeys: nil) {
+                    if let pkgInstaller = subContents.first(where: { $0.pathExtension == "pkg" }) {
+                        try await installFromPKG(pkgInstaller)
+                        return
+                    }
+                }
+            }
+        }
+        
+        throw DirectDownloadError.appNotFoundInDMG(appName)
     }
     
     private func mountDMG(_ dmgPath: URL) async throws -> URL {
-        let result = try await runShellCommand("hdiutil attach '\(dmgPath.path)' -nobrowse -quiet")
+        // Use -noautoopen to prevent Finder from opening the volume
+        // Do NOT use -quiet: we need the output to parse the mount point
+        // Use yes | to auto-accept any license agreements (e.g., Blackmagic DMGs)
+        let result = try await runShellCommand("yes | hdiutil attach '\(dmgPath.path)' -nobrowse -noautoopen -noverify")
         
         if result.exitCode != 0 {
             throw DirectDownloadError.mountFailed(dmgPath.lastPathComponent, result.error)
         }
         
-        // Parse mount point from output
+        // Parse mount point from hdiutil output
+        // Output format: `/dev/diskXsY    Apple_HFS    /Volumes/VolumeName`
+        // Fields are separated by tabs, but spacing can vary
         let lines = result.output.components(separatedBy: "\n")
         for line in lines.reversed() {
+            // Try tab-separated first
             let components = line.components(separatedBy: "\t")
-            if components.count >= 3 {
-                let mountPath = components.last?.trimmingCharacters(in: .whitespaces) ?? ""
-                if !mountPath.isEmpty && mountPath.hasPrefix("/Volumes/") {
+            for component in components.reversed() {
+                let trimmed = component.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("/Volumes/") {
+                    return URL(fileURLWithPath: trimmed)
+                }
+            }
+            // Fallback: scan for /Volumes/ anywhere in the line (handles varied whitespace)
+            if let range = line.range(of: "/Volumes/") {
+                let mountPath = String(line[range.lowerBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !mountPath.isEmpty {
                     return URL(fileURLWithPath: mountPath)
                 }
             }
@@ -156,22 +190,6 @@ class DirectDownloadInstaller {
     
     private func unmountDMG(_ mountPoint: URL) async throws {
         _ = try await runShellCommand("hdiutil detach '\(mountPoint.path)' -quiet")
-    }
-    
-    private func findAppBundle(in directory: URL, name: String) throws -> URL {
-        let contents = try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
-        
-        // Look for .app bundle
-        if let appBundle = contents.first(where: { $0.pathExtension == "app" }) {
-            return appBundle
-        }
-        
-        // Look for installer .pkg
-        if let pkgInstaller = contents.first(where: { $0.pathExtension == "pkg" }) {
-            throw DirectDownloadError.foundPKGInDMG(pkgInstaller)
-        }
-        
-        throw DirectDownloadError.appNotFoundInDMG(name)
     }
     
     // MARK: - PKG Installation
@@ -283,12 +301,14 @@ class DirectDownloadInstaller {
     }
     
     private func runShellCommandWithElevation(_ command: String) async throws -> ShellResult {
+        // Inject PATH into command so it survives sudo/osascript environment resets
+        let fullCommand = "export PATH=/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:$PATH && \(command)"
+        
         // Use stored admin password with sudo -S to avoid repeated password prompts
         guard let password = adminPassword else {
             // Fallback: osascript dialog (will prompt each time)
-            let script = """
-            do shell script "\(command.replacingOccurrences(of: "\"", with: "\\\""))" with administrator privileges
-            """
+            let escapedCmd = fullCommand.replacingOccurrences(of: "\"", with: "\\\"")
+            let script = "do shell script \"\(escapedCmd)\" with administrator privileges"
             return try await withCheckedThrowingContinuation { continuation in
                 DispatchQueue.global(qos: .userInitiated).async {
                     let process = Process()
@@ -320,7 +340,7 @@ class DirectDownloadInstaller {
                 let errorPipe = Pipe()
                 
                 process.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
-                process.arguments = ["-S", "/bin/zsh", "-c", command]
+                process.arguments = ["-S", "/bin/zsh", "-c", fullCommand]
                 process.standardInput = inputPipe
                 process.standardOutput = outputPipe
                 process.standardError = errorPipe
@@ -357,7 +377,6 @@ enum DirectDownloadError: LocalizedError {
     case downloadFailed(String)
     case mountFailed(String, String)
     case appNotFoundInDMG(String)
-    case foundPKGInDMG(URL)
     case pkgInstallFailed(String, String)
     case extractFailed(String, String)
     case runScriptFailed(String, String)
@@ -371,9 +390,7 @@ enum DirectDownloadError: LocalizedError {
         case .mountFailed(let name, let error):
             return "Failed to mount \(name): \(error)"
         case .appNotFoundInDMG(let name):
-            return "Could not find \(name).app in disk image"
-        case .foundPKGInDMG(let url):
-            return "Found PKG installer in DMG: \(url.lastPathComponent)"
+            return "Could not find .app or .pkg in disk image for \(name)"
         case .pkgInstallFailed(let name, let error):
             return "Failed to install \(name): \(error)"
         case .extractFailed(let name, let error):

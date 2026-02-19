@@ -188,14 +188,10 @@ class SystemStandardizer {
             iconImage = NSImage(contentsOfFile: iconPath)
         }
         
-        // Fall back to bundled default logo if no custom icon or loading failed
+        // Fall back to bundled default logo from asset catalog
         if iconImage == nil {
-            // Try to load from app bundle
-            if let bundledPath = Bundle.main.path(forResource: "DefaultLogo", ofType: "png") {
-                iconImage = NSImage(contentsOfFile: bundledPath)
-            } else if let bundledPath = Bundle.main.path(forResource: "AppIcon", ofType: "icns") {
-                iconImage = NSImage(contentsOfFile: bundledPath)
-            }
+            // Asset catalog images must be loaded via NSImage(named:), not Bundle path
+            iconImage = NSImage(named: "DefaultLogo")
         }
         
         if let image = iconImage {
@@ -399,12 +395,14 @@ class SystemStandardizer {
     }
     
     private func runShellCommandWithElevation(_ command: String) async throws -> ShellResult {
+        // Inject PATH into command so it survives sudo/osascript environment resets
+        let fullCommand = "export PATH=/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:$PATH && \(command)"
+        
         // Use stored admin password with sudo -S to avoid repeated password prompts
         guard let password = adminPassword else {
             // Fallback: osascript dialog (will prompt each time)
-            let script = """
-            do shell script "\(command.replacingOccurrences(of: "\"", with: "\\\""))" with administrator privileges
-            """
+            let escapedCmd = fullCommand.replacingOccurrences(of: "\"", with: "\\\"")
+            let script = "do shell script \"\(escapedCmd)\" with administrator privileges"
             return try await withCheckedThrowingContinuation { continuation in
                 DispatchQueue.global(qos: .userInitiated).async {
                     let process = Process()
@@ -436,7 +434,7 @@ class SystemStandardizer {
                 let errorPipe = Pipe()
                 
                 process.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
-                process.arguments = ["-S", "/bin/zsh", "-c", command]
+                process.arguments = ["-S", "/bin/zsh", "-c", fullCommand]
                 process.standardInput = inputPipe
                 process.standardOutput = outputPipe
                 process.standardError = errorPipe

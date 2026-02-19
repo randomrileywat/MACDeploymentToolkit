@@ -360,21 +360,58 @@ class DeploymentManager: ObservableObject {
     
     /// Check if an application is already installed
     private func isApplicationInstalled(_ app: ApplicationDefinition) async -> Bool {
+        // First do a broad check: scan /Applications for a matching .app bundle
+        // This handles cases where the installed app name differs slightly from catalog name
+        if appExistsInApplications(app.name) {
+            return true
+        }
+        
         switch app.installMethod {
         case .homebrew(let type):
             guard let packageId = app.packageId else { return false }
             return await homebrewInstaller.isInstalled(packageId: packageId, type: type)
             
-        case .macAppStore(let appId):
-            // Check if app exists in /Applications
-            return FileManager.default.fileExists(atPath: "/Applications/\(app.name).app")
+        case .macAppStore:
+            return false  // Already checked above
             
         case .directDownload, .custom:
-            // Check common installation paths
-            let appPath = "/Applications/\(app.name).app"
-            let alternatePath = FileManager.default.homeDirectoryForCurrentUser.path + "/Applications/\(app.name).app"
-            return FileManager.default.fileExists(atPath: appPath) || FileManager.default.fileExists(atPath: alternatePath)
+            return false  // Already checked above
         }
+    }
+    
+    /// Scan /Applications (and ~/Applications) for an app whose name contains the search term
+    /// Does case-insensitive matching and handles partial names (e.g., "Blackmagic Desktop Video" matches
+    /// "Blackmagic Desktop Video.app" or "Blackmagic Desktop Video Setup.app")
+    private func appExistsInApplications(_ appName: String) -> Bool {
+        let fm = FileManager.default
+        let searchLower = appName.lowercased()
+        
+        // Check /Applications
+        if let contents = try? fm.contentsOfDirectory(atPath: "/Applications") {
+            for item in contents {
+                if item.hasSuffix(".app") {
+                    let installedName = String(item.dropLast(4)).lowercased()  // strip .app
+                    if installedName == searchLower || installedName.contains(searchLower) || searchLower.contains(installedName) {
+                        return true
+                    }
+                }
+            }
+        }
+        
+        // Check ~/Applications
+        let userApps = fm.homeDirectoryForCurrentUser.appendingPathComponent("Applications").path
+        if let contents = try? fm.contentsOfDirectory(atPath: userApps) {
+            for item in contents {
+                if item.hasSuffix(".app") {
+                    let installedName = String(item.dropLast(4)).lowercased()
+                    if installedName == searchLower || installedName.contains(searchLower) || searchLower.contains(installedName) {
+                        return true
+                    }
+                }
+            }
+        }
+        
+        return false
     }
     
     /// Install an application based on its installation method
