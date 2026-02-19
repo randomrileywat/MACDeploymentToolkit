@@ -129,11 +129,26 @@ class DeploymentManager: ObservableObject {
         log("(You will only need to enter your password once)", color: .logGray)
         currentStatus = "Requesting admin privileges..."
         
-        let adminGranted = await requestAdminPrivileges()
-        if adminGranted {
-            log("✓ Administrator privileges granted", color: .logGreen)
-        } else {
-            log("⚠ Administrator privileges not granted - some features may fail", color: .logOrange)
+        var adminGranted = false
+        let maxAttempts = 3
+        for attempt in 1...maxAttempts {
+            adminGranted = await requestAdminPrivileges()
+            if adminGranted {
+                log("✓ Administrator privileges granted", color: .logGreen)
+                break
+            } else if attempt < maxAttempts {
+                log("✗ Incorrect password. Please try again (attempt \(attempt)/\(maxAttempts))...", color: .logRed)
+            } else {
+                log("✗ Failed to authenticate after \(maxAttempts) attempts. Deployment cannot continue.", color: .logRed)
+            }
+        }
+        
+        if !adminGranted {
+            friendlyMessage = "Deployment Failed"
+            currentStatus = "Authentication failed"
+            isComplete = true
+            stopFriendlyMessages()
+            return
         }
         log("")
         
@@ -144,6 +159,10 @@ class DeploymentManager: ObservableObject {
             currentStatus = "Configuring system settings..."
             
             do {
+                // Pass all catalog app names so dock cleanup preserves them
+                let allCatalogNames = ApplicationCatalog.applications.values.flatMap { $0 }.map { $0.name }
+                systemStandardizer.catalogAppNames = Set(allCatalogNames)
+                
                 try await systemStandardizer.applyStandardization(
                     computerName: computerName,
                     customIconPath: customIconPath

@@ -77,14 +77,24 @@ class SystemStandardizer {
         try await restartDock()
     }
     
+    /// All app names from the deployment catalog — set by DeploymentManager before standardization.
+    /// Apps matching these names will be preserved in the dock during cleanup.
+    var catalogAppNames: Set<String> = []
+    
     private func configureDockApps() async throws {
-        // First, completely clear the dock persistent apps
-        _ = try await runShellCommand("defaults delete com.apple.dock persistent-apps 2>/dev/null || true")
+        // Read current dock apps so we can preserve catalog apps
+        let preservedPaths = await getCurrentDockAppPaths(preserving: catalogAppNames)
         
-        // Re-initialize as empty array so -array-add works
+        // Clear the dock
+        _ = try await runShellCommand("defaults delete com.apple.dock persistent-apps 2>/dev/null || true")
         _ = try await runShellCommand("defaults write com.apple.dock persistent-apps -array")
         
-        // List of apps to add to dock
+        // Re-add preserved catalog apps first (keeps their existing order)
+        for path in preservedPaths {
+            try await addAppToDockUnchecked(appPath: path)
+        }
+        
+        // Standard apps to add to dock (after catalog apps)
         // Note: Finder is always shown by macOS — do NOT add it here or it appears twice
         let dockApps: [(name: String, path: String)] = [
             ("Chrome", "/Applications/Google Chrome.app"),
@@ -93,33 +103,83 @@ class SystemStandardizer {
             ("System Settings", "/System/Applications/System Settings.app")
         ]
         
-        // Add each app individually using XML plist format with proper _CFURLStringType
         for app in dockApps {
-            // Skip Chrome if not installed (Safari intentionally NOT added)
-            if app.name == "Chrome" && !fileManager.fileExists(atPath: app.path) {
-                continue
-            }
-            
-            // For System Preferences/Settings, use the one that exists
-            if app.name == "System Preferences" || app.name == "System Settings" {
-                if !fileManager.fileExists(atPath: app.path) {
-                    continue
-                }
-            }
-            
-            // Only add if the app exists
+            if app.name == "Chrome" && !fileManager.fileExists(atPath: app.path) { continue }
+            if (app.name == "System Preferences" || app.name == "System Settings") && !fileManager.fileExists(atPath: app.path) { continue }
             if fileManager.fileExists(atPath: app.path) {
                 try await addAppToDock(appPath: app.path)
             }
         }
     }
     
-    /// Add an application to the Dock's persistent apps using proper plist format
-    /// Uses XML plist with _CFURLStringType=0 (POSIX path) to prevent question mark icons
+    /// Read current dock persistent-apps and return paths of apps whose names match the catalog
+    private func getCurrentDockAppPaths(preserving catalogNames: Set<String>) async -> [String] {
+        guard !catalogNames.isEmpty else { return [] }
+        
+        // Use PlistBuddy to read persistent-apps entries
+        let countResult = try? await runShellCommand("/usr/libexec/PlistBuddy -c 'Print :persistent-apps' ~/Library/Preferences/com.apple.dock.plist 2>/dev/null | grep -c 'CFURLString' || echo 0")
+        
+        // Read all app paths from the dock plist via defaults
+        let readResult = try? await runShellCommand("defaults read com.apple.dock persistent-apps 2>/dev/null | grep '_CFURLString' | sed 's/.*= \"\\(.*\\)\";/\\1/' | sed 's/.*= \\(.*\\);/\\1/'")
+        guard let output = readResult?.output, !output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return []
+        }
+        
+        let catalogNamesLower = Set(catalogNames.map { $0.lowercased() })
+        var preserved: [String] = []
+        
+        for line in output.components(separatedBy: .newlines) {
+            let path = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\";"))
+            guard !path.isEmpty, path.hasSuffix(".app") else { continue }
+            
+            let appName = (path as NSString).lastPathComponent
+                .replacingOccurrences(of: ".app", with: "")
+                .lowercased()
+            
+            // Keep this dock entry if its name matches any catalog app
+            if catalogNamesLower.contains(where: { appName.contains($0) || $0.contains(appName) }) {
+                preserved.append(path)
+            }
+        }
+        
+        return preserved
+    }
+    
+    /// Returns the set of app labels currently in the dock
+    func getCurrentDockAppLabels() async -> Set<String> {
+        let readResult = try? await runShellCommand("defaults read com.apple.dock persistent-apps 2>/dev/null | grep 'file-label' | sed 's/.*= \"\\(.*\\)\";/\\1/' | sed 's/.*= \\(.*\\);/\\1/'")
+        guard let output = readResult?.output else { return [] }
+        
+        var labels = Set<String>()
+        for line in output.components(separatedBy: .newlines) {
+            let label = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\";"))
+            if !label.isEmpty {
+                labels.insert(label.lowercased())
+            }
+        }
+        return labels
+    }
+    
+    /// Add an application to the Dock, skipping if it's already present.
+    /// Uses XML plist with _CFURLStringType=0 (POSIX path) to prevent question mark icons.
     func addAppToDock(appPath: String) async throws {
-        // Verify the app exists before adding
         guard fileManager.fileExists(atPath: appPath) else { return }
         
+        // Check if already in dock to prevent duplicates
+        let appLabel = (appPath as NSString).lastPathComponent
+            .replacingOccurrences(of: ".app", with: "")
+            .lowercased()
+        let currentLabels = await getCurrentDockAppLabels()
+        if currentLabels.contains(appLabel) { return }
+        
+        try await addAppToDockUnchecked(appPath: appPath)
+    }
+    
+    /// Add an application to the Dock unconditionally (no duplicate check).
+    /// Used when rebuilding the dock from scratch (duplicates impossible).
+    private func addAppToDockUnchecked(appPath: String) async throws {
         let addCommand = """
         defaults write com.apple.dock persistent-apps -array-add '<dict><key>tile-data</key><dict><key>file-data</key><dict><key>_CFURLString</key><string>\(appPath)</string><key>_CFURLStringType</key><integer>0</integer></dict><key>file-label</key><string>\((appPath as NSString).lastPathComponent.replacingOccurrences(of: ".app", with: ""))</string></dict><key>tile-type</key><string>file-tile</string></dict>'
         """
