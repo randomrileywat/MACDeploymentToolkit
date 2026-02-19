@@ -348,7 +348,18 @@ class HomebrewInstaller {
             args = ["install", packageId]
         }
         
-        let result = try await runBrewCommand(args)
+        var result = try await runBrewCommand(args)
+        
+        // If a stale lock file from a previous interrupted install blocks us,
+        // clean up and retry once
+        if result.exitCode != 0 && result.error.contains("already locked") {
+            debugLog?("  ⚠ Stale lock detected, cleaning up and retrying...")
+            _ = try? await runBrewCommand(["cleanup", "--prune=all"])
+            // Also remove any .incomplete download files directly
+            let cacheCleanup = "rm -f ~/Library/Caches/Homebrew/downloads/*.incomplete"
+            _ = try? await runShellCommandRaw(cacheCleanup)
+            result = try await runBrewCommand(args)
+        }
         
         if result.exitCode != 0 {
             // Include full diagnostics in the error so they appear in the deployment log
