@@ -82,16 +82,16 @@ class SystemStandardizer {
     var catalogAppNames: Set<String> = []
     
     private func configureDockApps() async throws {
-        // Read current dock apps so we can preserve catalog apps
-        let preservedPaths = await getCurrentDockAppPaths(preserving: catalogAppNames)
+        // Read current dock apps natively so we can preserve catalog apps
+        let preservedEntries = readCurrentDockEntries(preserving: catalogAppNames)
         
         // Clear the dock
         _ = try await runShellCommand("defaults delete com.apple.dock persistent-apps 2>/dev/null || true")
         _ = try await runShellCommand("defaults write com.apple.dock persistent-apps -array")
         
-        // Re-add preserved catalog apps first (keeps their existing order)
-        for path in preservedPaths {
-            try await addAppToDockUnchecked(appPath: path)
+        // Re-add preserved catalog apps first by writing their original plist entries back
+        for entry in preservedEntries {
+            try await addDockEntryFromDict(entry)
         }
         
         // Standard apps to add to dock (after catalog apps)
@@ -112,78 +112,81 @@ class SystemStandardizer {
         }
     }
     
-    /// Read current dock persistent-apps and return paths of apps whose names match the catalog
-    private func getCurrentDockAppPaths(preserving catalogNames: Set<String>) async -> [String] {
+    /// Read current dock persistent-apps directly from the plist file using Foundation.
+    /// Returns the raw plist dictionaries for entries whose app names match the catalog.
+    private func readCurrentDockEntries(preserving catalogNames: Set<String>) -> [[String: Any]] {
         guard !catalogNames.isEmpty else { return [] }
         
-        // Export the dock plist as XML for reliable parsing
-        let readResult = try? await runShellCommand("plutil -convert xml1 -o - ~/Library/Preferences/com.apple.dock.plist 2>/dev/null")
-        guard let output = readResult?.output, !output.isEmpty else { return [] }
+        let plistPath = fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Preferences/com.apple.dock.plist").path
         
-        // Extract all _CFURLString values (app paths) from the XML
-        // Pattern: <key>_CFURLString</key>\n\t*<string>...</string>
-        let allPaths = extractCFURLStrings(from: output)
+        guard let dockDict = NSDictionary(contentsOfFile: plistPath),
+              let persistentApps = dockDict["persistent-apps"] as? [[String: Any]] else {
+            return []
+        }
         
         let catalogNamesLower = Set(catalogNames.map { $0.lowercased() })
-        var preserved: [String] = []
+        var preserved: [[String: Any]] = []
         
-        for path in allPaths {
-            guard path.hasSuffix(".app") || path.hasSuffix(".app/") else { continue }
+        for entry in persistentApps {
+            guard let tileData = entry["tile-data"] as? [String: Any] else { continue }
             
-            let cleanPath = path.hasSuffix("/") ? String(path.dropLast()) : path
-            let appName = (cleanPath as NSString).lastPathComponent
-                .replacingOccurrences(of: ".app", with: "")
-                .lowercased()
+            // Try to match by file-label first
+            if let label = tileData["file-label"] as? String {
+                let labelLower = label.lowercased()
+                if catalogNamesLower.contains(where: { labelLower.contains($0) || $0.contains(labelLower) }) {
+                    preserved.append(entry)
+                    continue
+                }
+            }
             
-            // Keep this dock entry if its name matches any catalog app
-            if catalogNamesLower.contains(where: { appName.contains($0) || $0.contains(appName) }) {
-                preserved.append(cleanPath)
+            // Fall back to matching by path
+            if let fileData = tileData["file-data"] as? [String: Any],
+               let urlString = fileData["_CFURLString"] as? String {
+                let cleanPath = urlString.hasSuffix("/") ? String(urlString.dropLast()) : urlString
+                let appName = (cleanPath as NSString).lastPathComponent
+                    .replacingOccurrences(of: ".app", with: "")
+                    .lowercased()
+                if catalogNamesLower.contains(where: { appName.contains($0) || $0.contains(appName) }) {
+                    preserved.append(entry)
+                }
             }
         }
         
         return preserved
     }
     
-    /// Extract _CFURLString values from XML plist data
-    private func extractCFURLStrings(from xml: String) -> [String] {
-        var results: [String] = []
-        let lines = xml.components(separatedBy: .newlines)
-        for (i, line) in lines.enumerated() {
-            if line.trimmingCharacters(in: .whitespaces).contains("<key>_CFURLString</key>") {
-                // Next line should have the <string>value</string>
-                if i + 1 < lines.count {
-                    let valueLine = lines[i + 1].trimmingCharacters(in: .whitespaces)
-                    if let start = valueLine.range(of: "<string>"),
-                       let end = valueLine.range(of: "</string>") {
-                        let value = String(valueLine[start.upperBound..<end.lowerBound])
-                        results.append(value)
-                    }
-                }
-            }
-        }
-        return results
+    /// Write a preserved dock entry back using its original plist XML
+    private func addDockEntryFromDict(_ entry: [String: Any]) async throws {
+        // Serialize the entry to XML plist format
+        guard let data = try? PropertyListSerialization.data(fromPropertyList: entry, format: .xml, options: 0),
+              let xmlString = String(data: data, encoding: .utf8) else { return }
+        
+        // Write to a temp file then use defaults import-style approach
+        let tempPath = fileManager.temporaryDirectory.appendingPathComponent("dock_entry_\(UUID().uuidString).plist").path
+        fileManager.createFile(atPath: tempPath, contents: data)
+        defer { try? fileManager.removeItem(atPath: tempPath) }
+        
+        // Use PlistBuddy to add the entry to persistent-apps array
+        let cmd = "/usr/libexec/PlistBuddy -c 'Add :persistent-apps: dict' ~/Library/Preferences/com.apple.dock.plist 2>/dev/null; /usr/libexec/PlistBuddy -c 'Merge \(tempPath) :persistent-apps:' ~/Library/Preferences/com.apple.dock.plist 2>/dev/null || true"
+        _ = try await runShellCommand(cmd)
     }
     
-    /// Returns the set of app labels currently in the dock
-    func getCurrentDockAppLabels() async -> Set<String> {
-        let readResult = try? await runShellCommand("plutil -convert xml1 -o - ~/Library/Preferences/com.apple.dock.plist 2>/dev/null")
-        guard let output = readResult?.output, !output.isEmpty else { return [] }
+    /// Returns the set of app labels currently in the dock (read natively)
+    func getCurrentDockAppLabels() -> Set<String> {
+        let plistPath = fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Preferences/com.apple.dock.plist").path
         
-        // Extract file-label values from the XML
+        guard let dockDict = NSDictionary(contentsOfFile: plistPath),
+              let persistentApps = dockDict["persistent-apps"] as? [[String: Any]] else {
+            return []
+        }
+        
         var labels = Set<String>()
-        let lines = output.components(separatedBy: .newlines)
-        for (i, line) in lines.enumerated() {
-            if line.trimmingCharacters(in: .whitespaces).contains("<key>file-label</key>") {
-                if i + 1 < lines.count {
-                    let valueLine = lines[i + 1].trimmingCharacters(in: .whitespaces)
-                    if let start = valueLine.range(of: "<string>"),
-                       let end = valueLine.range(of: "</string>") {
-                        let label = String(valueLine[start.upperBound..<end.lowerBound])
-                        if !label.isEmpty {
-                            labels.insert(label.lowercased())
-                        }
-                    }
-                }
+        for entry in persistentApps {
+            if let tileData = entry["tile-data"] as? [String: Any],
+               let label = tileData["file-label"] as? String, !label.isEmpty {
+                labels.insert(label.lowercased())
             }
         }
         return labels
@@ -198,7 +201,7 @@ class SystemStandardizer {
         let appLabel = (appPath as NSString).lastPathComponent
             .replacingOccurrences(of: ".app", with: "")
             .lowercased()
-        let currentLabels = await getCurrentDockAppLabels()
+        let currentLabels = getCurrentDockAppLabels()
         if currentLabels.contains(appLabel) { return }
         
         try await addAppToDockUnchecked(appPath: appPath)
