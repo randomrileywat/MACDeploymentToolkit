@@ -62,46 +62,40 @@ class HomebrewInstaller {
     }
     
     /// Install Homebrew non-interactively using the stored admin password.
-    /// Sets NONINTERACTIVE=1 so the official install script doesn't prompt,
-    /// and pipes the admin password to sudo -S for privilege escalation.
+    /// Pre-authenticates sudo in the same shell session so the installer's
+    /// internal sudo calls reuse the cached credentials.
     func installHomebrew() async throws {
         guard let password = adminPassword else {
             throw HomebrewError.installationFailed("No admin password available. Cannot install Homebrew non-interactively.")
         }
         
-        // The official Homebrew installer supports NONINTERACTIVE=1 to skip prompts.
-        // We pipe the admin password to sudo -S via the installer's internal sudo calls.
-        // CI=1 also suppresses prompts and is the documented env var for CI systems.
-        let installCommand = "NONINTERACTIVE=1 CI=1 /bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+        // Strategy: pipe password to `sudo -S -v` to cache credentials in THIS shell,
+        // then immediately run the Homebrew installer in the same shell session.
+        // The installer's internal sudo calls will reuse the cached credentials.
+        // NONINTERACTIVE=1 tells the installer to skip interactive prompts.
+        let escapedPassword = password.replacingOccurrences(of: "'", with: "'\\''")
+        let installCommand = """
+        echo '\(escapedPassword)' | sudo -S -v 2>/dev/null && \
+        NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+        """
         
-        // Run the installer with the admin password available via sudo -S
         let result = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<ShellResult, Error>) in
             DispatchQueue.global(qos: .userInitiated).async {
                 let process = Process()
-                let inputPipe = Pipe()
                 let outputPipe = Pipe()
                 let errorPipe = Pipe()
                 
                 process.executableURL = URL(fileURLWithPath: "/bin/zsh")
                 process.arguments = ["-c", installCommand]
-                process.standardInput = inputPipe
                 process.standardOutput = outputPipe
                 process.standardError = errorPipe
                 
-                // Set environment so sudo inside the script can read password from stdin
                 var env = ProcessInfo.processInfo.environment
                 env["NONINTERACTIVE"] = "1"
-                env["CI"] = "1"
                 process.environment = env
                 
                 do {
                     try process.run()
-                    
-                    // The installer calls sudo internally; pipe password for those calls
-                    let passwordData = (password + "\n").data(using: .utf8)!
-                    inputPipe.fileHandleForWriting.write(passwordData)
-                    inputPipe.fileHandleForWriting.closeFile()
-                    
                     process.waitUntilExit()
                     
                     let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
