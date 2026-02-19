@@ -364,9 +364,12 @@ class HomebrewInstaller {
                 guard !data.isEmpty else { return }
                 if let text = String(data: data, encoding: .utf8) {
                     allOutput += text
-                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !trimmed.isEmpty {
-                        self?.debugLog?("  \(trimmed)")
+                    // Only log meaningful progress lines (skip noisy output)
+                    for line in text.components(separatedBy: .newlines) {
+                        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if Self.isProgressLine(trimmed) {
+                            self?.debugLog?("  \(trimmed)")
+                        }
                     }
                 }
             }
@@ -376,9 +379,11 @@ class HomebrewInstaller {
                 guard !data.isEmpty else { return }
                 if let text = String(data: data, encoding: .utf8) {
                     allError += text
-                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !trimmed.isEmpty {
-                        self?.debugLog?("  \(trimmed)")
+                    for line in text.components(separatedBy: .newlines) {
+                        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if Self.isProgressLine(trimmed) {
+                            self?.debugLog?("  \(trimmed)")
+                        }
                     }
                 }
             }
@@ -489,6 +494,37 @@ class HomebrewInstaller {
     /// Always includes BOTH ARM and Intel paths — no FileManager checks (sandbox-safe).
     private func commandWithPath(_ command: String) -> String {
         return "export HOMEBREW_PREFIX=/opt/homebrew HOMEBREW_CELLAR=/opt/homebrew/Cellar HOMEBREW_REPOSITORY=/opt/homebrew PATH=/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH && \(command)"
+    }
+    
+    /// Filters streaming output to only show meaningful progress lines.
+    /// Reduces noise from verbose brew/installer output.
+    private static func isProgressLine(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        
+        // Always show lines that start with key indicators
+        let showPrefixes = ["==>", "-->", "Downloading", "Installing", "Pouring",
+                            "Cloning", "Updating", "Already", "Warning",
+                            "Error", "fatal", "Successfully", "Linking",
+                            "Moving", "Purging"]
+        for prefix in showPrefixes {
+            if trimmed.hasPrefix(prefix) { return true }
+        }
+        
+        // Show percentage/progress indicators
+        if trimmed.contains("###") || trimmed.contains("%") { return true }
+        
+        // Hide noisy lines
+        let hidePrefixes = ["Password:", "sudo:", "  ", "#"]
+        for prefix in hidePrefixes {
+            if trimmed.hasPrefix(prefix) { return false }
+        }
+        
+        // Hide very short lines (usually partial output)
+        if trimmed.count < 5 { return false }
+        
+        // Default: hide (reduces verbosity)
+        return false
     }
     
     private func runShellCommandWithElevation(_ command: String) async throws -> ShellResult {

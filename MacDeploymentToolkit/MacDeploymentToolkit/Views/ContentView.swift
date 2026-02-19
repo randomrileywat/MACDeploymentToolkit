@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import AppKit
 
 struct ContentView: View {
     @EnvironmentObject var deploymentManager: DeploymentManager
@@ -16,6 +17,7 @@ struct ContentView: View {
     @State private var macStandardizationEnabled = false
     @State private var computerName: String = ContentView.cleanComputerName()
     @State private var customIconPath: String = ""
+    @State private var copiedToClipboard: Bool = false
     
     private let primaryBlue = Color(red: 0, green: 0.47, blue: 0.83) // #0078D4
     
@@ -455,6 +457,30 @@ struct ContentView: View {
                     .font(.system(size: 12, weight: .bold))
                 
                 Spacer()
+                
+                // Copy Log button
+                Button(action: {
+                    let logText = deploymentManager.logEntries.map { entry in
+                        let formatter = DateFormatter()
+                        formatter.dateFormat = "HH:mm:ss"
+                        return "[\(formatter.string(from: entry.timestamp))] \(entry.message)"
+                    }.joined(separator: "\n")
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(logText, forType: .string)
+                    copiedToClipboard = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        copiedToClipboard = false
+                    }
+                }) {
+                    HStack(spacing: 3) {
+                        Image(systemName: copiedToClipboard ? "checkmark" : "doc.on.doc")
+                        Text(copiedToClipboard ? "Copied!" : "Copy Log")
+                    }
+                    .font(.system(size: 10))
+                    .foregroundColor(copiedToClipboard ? .green : .secondary)
+                }
+                .buttonStyle(.plain)
+                .disabled(deploymentManager.logEntries.isEmpty)
                 
                 Text(deploymentManager.currentStatus)
                     .font(.system(size: 11))
