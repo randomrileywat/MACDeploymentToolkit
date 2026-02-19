@@ -210,66 +210,19 @@ class HomebrewInstaller {
     
     /// Install a package via Homebrew
     func install(packageId: String, type: InstallMethod.HomebrewType) async throws {
-        let arguments: [String]
+        let command: String
         switch type {
         case .cask:
-            arguments = ["install", "--cask", "--force", packageId]
+            command = "\(effectiveBrewPath) install --cask --force \(packageId)"
         case .formula:
-            arguments = ["install", packageId]
+            command = "\(effectiveBrewPath) install \(packageId)"
         }
         
-        // Run the brew binary DIRECTLY as the process executable.
-        // This avoids all zsh shell PATH issues — brew's own shell script wrapper
-        // sets up HOMEBREW_BREW_FILE and other internal env vars correctly.
-        let brewBinary = effectiveBrewPath
-        
-        let result: ShellResult = try await withCheckedThrowingContinuation { continuation in
-            let process = Process()
-            let outputPipe = Pipe()
-            let errorPipe = Pipe()
-            
-            process.executableURL = URL(fileURLWithPath: brewBinary)
-            process.arguments = arguments
-            process.standardOutput = outputPipe
-            process.standardError = errorPipe
-            
-            // Set up comprehensive environment for brew and its subprocesses
-            var env = ProcessInfo.processInfo.environment
-            let brewPrefix = brewBinary.contains("/opt/homebrew") ? "/opt/homebrew" : "/usr/local"
-            let brewBinPaths = "\(brewPrefix)/bin:\(brewPrefix)/sbin"
-            env["PATH"] = "\(brewBinPaths):/usr/bin:/bin:/usr/sbin:/sbin:\(env["PATH"] ?? "")"
-            env["HOMEBREW_PREFIX"] = brewPrefix
-            env["HOMEBREW_CELLAR"] = "\(brewPrefix)/Cellar"
-            env["HOMEBREW_REPOSITORY"] = brewPrefix
-            process.environment = env
-            
-            do {
-                try process.run()
-                process.waitUntilExit()
-                
-                let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-                let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-                
-                let output = String(data: outputData, encoding: .utf8) ?? ""
-                let error = String(data: errorData, encoding: .utf8) ?? ""
-                
-                continuation.resume(returning: ShellResult(
-                    output: output,
-                    error: error,
-                    exitCode: process.terminationStatus
-                ))
-            } catch {
-                continuation.resume(throwing: error)
-            }
-        }
+        let result = try await runShellCommand(command)
         
         if result.exitCode != 0 {
-            // Include full diagnostic info in the error message
-            let diagnostic = """
-            \(result.error)
-            [brew binary: \(brewBinary)]
-            [stdout: \(result.output.prefix(200))]
-            """
+            // Include full diagnostics in the error so they appear in the deployment log
+            let diagnostic = "\(result.error)\n[cmd: \(command)]\n[stdout: \(result.output.prefix(300))]\n[brew: \(effectiveBrewPath)]"
             throw HomebrewError.packageInstallFailed(packageId, diagnostic)
         }
     }
@@ -355,29 +308,18 @@ class HomebrewInstaller {
         }
     }
     
-    /// Injects the full Homebrew environment into a command string.
-    /// Sets PATH, HOMEBREW_PREFIX, HOMEBREW_CELLAR, and HOMEBREW_REPOSITORY
-    /// directly (without depending on `brew shellenv`) so that all subprocesses
-    /// spawned by brew's Ruby code can find `brew` by bare name.
+    /// Injects the full Homebrew environment into a command string as a single-line prefix.
     private func commandWithPath(_ command: String) -> String {
         let brewPrefix: String
         let brewBinPaths: String
         if FileManager.default.fileExists(atPath: brewPath) {
-            // Apple Silicon
             brewPrefix = "/opt/homebrew"
             brewBinPaths = "/opt/homebrew/bin:/opt/homebrew/sbin"
         } else {
-            // Intel
             brewPrefix = "/usr/local"
             brewBinPaths = "/usr/local/bin:/usr/local/sbin"
         }
-        return """
-        export HOMEBREW_PREFIX="\(brewPrefix)" && \
-        export HOMEBREW_CELLAR="\(brewPrefix)/Cellar" && \
-        export HOMEBREW_REPOSITORY="\(brewPrefix)" && \
-        export PATH="\(brewBinPaths):/usr/bin:/bin:/usr/sbin:/sbin:$PATH" && \
-        \(command)
-        """
+        return "export HOMEBREW_PREFIX=\(brewPrefix) HOMEBREW_CELLAR=\(brewPrefix)/Cellar HOMEBREW_REPOSITORY=\(brewPrefix) PATH=\(brewBinPaths):/usr/bin:/bin:/usr/sbin:/sbin:$PATH && \(command)"
     }
     
     private func runShellCommandWithElevation(_ command: String) async throws -> ShellResult {
