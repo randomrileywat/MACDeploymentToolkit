@@ -50,6 +50,7 @@ class DeploymentManager: ObservableObject {
     
     // Admin privileges
     private var sudoKeepaliveProcess: Process?
+    private var adminPassword: String?
     
     // Supabase configuration
     private let supabaseUrl = "https://incdoepqrbwaagatikgb.supabase.co"
@@ -308,7 +309,13 @@ class DeploymentManager: ObservableObject {
         }
         
         if isValid {
-            startSudoKeepalive()
+            // Store password for reuse by all services (avoids repeated prompts)
+            adminPassword = password
+            homebrewInstaller.adminPassword = password
+            directDownloadInstaller.adminPassword = password
+            systemStandardizer.adminPassword = password
+            
+            startSudoKeepalive(password: password)
             return true
         }
         
@@ -316,11 +323,15 @@ class DeploymentManager: ObservableObject {
     }
     
     /// Starts a background process that keeps sudo credentials alive
-    private func startSudoKeepalive() {
+    private func startSudoKeepalive(password: String) {
         sudoKeepaliveProcess = Process()
+        let inputPipe = Pipe()
+        
         sudoKeepaliveProcess?.executableURL = URL(fileURLWithPath: "/bin/zsh")
         // Refresh sudo every 4 minutes (sudo timeout is usually 5 minutes)
-        sudoKeepaliveProcess?.arguments = ["-c", "while true; do sudo -v; sleep 240; done"]
+        // Pipe the password to sudo -S -v each cycle
+        sudoKeepaliveProcess?.arguments = ["-c", "while true; do echo \"\(password.replacingOccurrences(of: "\"", with: "\\\""))\" | sudo -S -v 2>/dev/null; sleep 240; done"]
+        sudoKeepaliveProcess?.standardInput = inputPipe
         
         try? sudoKeepaliveProcess?.run()
     }
@@ -329,6 +340,12 @@ class DeploymentManager: ObservableObject {
     private func stopSudoKeepalive() {
         sudoKeepaliveProcess?.terminate()
         sudoKeepaliveProcess = nil
+        // Clear stored password from memory
+        adminPassword = nil
+        homebrewInstaller.adminPassword = nil
+        directDownloadInstaller.adminPassword = nil
+        systemStandardizer.adminPassword = nil
+        
         // Invalidate sudo credentials (fire and forget, don't block)
         DispatchQueue.global(qos: .utility).async {
             let process = Process()

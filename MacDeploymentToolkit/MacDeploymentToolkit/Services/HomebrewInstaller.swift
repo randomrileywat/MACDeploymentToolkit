@@ -15,6 +15,9 @@ class HomebrewInstaller {
     private let brewPath = "/opt/homebrew/bin/brew"
     private let brewPathIntel = "/usr/local/bin/brew"
     
+    /// Admin password set by DeploymentManager after initial prompt; used for sudo -S
+    var adminPassword: String?
+    
     private var effectiveBrewPath: String {
         if FileManager.default.fileExists(atPath: brewPath) {
             return brewPath
@@ -268,49 +271,88 @@ class HomebrewInstaller {
     }
     
     private func runShellCommandWithElevation(_ command: String) async throws -> ShellResult {
-        // Use osascript to run command with administrator privileges
-        // This handles casks that require sudo internally
-        let script = """
-        do shell script "\(command.replacingOccurrences(of: "\"", with: "\\\""))" with administrator privileges
-        """
-        
-        return try await withCheckedThrowingContinuation { continuation in
-            let process = Process()
-            let outputPipe = Pipe()
-            let errorPipe = Pipe()
-            
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            process.arguments = ["-e", script]
-            process.standardOutput = outputPipe
-            process.standardError = errorPipe
-            
-            // Add Homebrew paths to environment
-            var env = ProcessInfo.processInfo.environment
-            let homebrewPaths = "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin"
-            if let existingPath = env["PATH"] {
-                env["PATH"] = "\(homebrewPaths):\(existingPath)"
-            } else {
-                env["PATH"] = homebrewPaths
+        // Use stored admin password with sudo -S to avoid repeated password prompts
+        // Falls back to osascript dialog if no password is stored
+        guard let password = adminPassword else {
+            // Fallback: use osascript with administrator privileges (will prompt)
+            let script = """
+            do shell script "\(command.replacingOccurrences(of: "\"", with: "\\\""))" with administrator privileges
+            """
+            return try await withCheckedThrowingContinuation { continuation in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let process = Process()
+                    let outputPipe = Pipe()
+                    let errorPipe = Pipe()
+                    process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+                    process.arguments = ["-e", script]
+                    process.standardOutput = outputPipe
+                    process.standardError = errorPipe
+                    var env = ProcessInfo.processInfo.environment
+                    let homebrewPaths = "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin"
+                    if let existingPath = env["PATH"] {
+                        env["PATH"] = "\(homebrewPaths):\(existingPath)"
+                    } else {
+                        env["PATH"] = homebrewPaths
+                    }
+                    process.environment = env
+                    do {
+                        try process.run()
+                        process.waitUntilExit()
+                        let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                        let error = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                        continuation.resume(returning: ShellResult(output: output, error: error, exitCode: process.terminationStatus))
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
+                }
             }
-            process.environment = env
-            
-            do {
-                try process.run()
-                process.waitUntilExit()
+        }
+        
+        // Primary path: pipe stored password to sudo -S (no GUI prompt)
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let process = Process()
+                let inputPipe = Pipe()
+                let outputPipe = Pipe()
+                let errorPipe = Pipe()
                 
-                let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-                let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
+                process.arguments = ["-S", "/bin/zsh", "-c", command]
+                process.standardInput = inputPipe
+                process.standardOutput = outputPipe
+                process.standardError = errorPipe
                 
-                let output = String(data: outputData, encoding: .utf8) ?? ""
-                let error = String(data: errorData, encoding: .utf8) ?? ""
+                // Add Homebrew paths to environment
+                var env = ProcessInfo.processInfo.environment
+                let homebrewPaths = "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin"
+                if let existingPath = env["PATH"] {
+                    env["PATH"] = "\(homebrewPaths):\(existingPath)"
+                } else {
+                    env["PATH"] = homebrewPaths
+                }
+                process.environment = env
                 
-                continuation.resume(returning: ShellResult(
-                    output: output,
-                    error: error,
-                    exitCode: process.terminationStatus
-                ))
-            } catch {
-                continuation.resume(throwing: error)
+                do {
+                    try process.run()
+                    
+                    // Write password to stdin for sudo -S
+                    let passwordData = (password + "\n").data(using: .utf8)!
+                    inputPipe.fileHandleForWriting.write(passwordData)
+                    inputPipe.fileHandleForWriting.closeFile()
+                    
+                    process.waitUntilExit()
+                    
+                    let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                    let error = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                    
+                    continuation.resume(returning: ShellResult(
+                        output: output,
+                        error: error,
+                        exitCode: process.terminationStatus
+                    ))
+                } catch {
+                    continuation.resume(throwing: error)
+                }
             }
         }
     }

@@ -16,6 +16,9 @@ class SystemStandardizer {
     
     private let fileManager = FileManager.default
     
+    /// Admin password set by DeploymentManager after initial prompt; used for sudo -S
+    var adminPassword: String?
+    
     // MARK: - Main Standardization Entry Point
     
     /// Apply all standardization settings
@@ -396,38 +399,68 @@ class SystemStandardizer {
     }
     
     private func runShellCommandWithElevation(_ command: String) async throws -> ShellResult {
-        // Use osascript to run command with administrator privileges
-        let script = """
-        do shell script "\(command.replacingOccurrences(of: "\"", with: "\\\""))" with administrator privileges
-        """
+        // Use stored admin password with sudo -S to avoid repeated password prompts
+        guard let password = adminPassword else {
+            // Fallback: osascript dialog (will prompt each time)
+            let script = """
+            do shell script "\(command.replacingOccurrences(of: "\"", with: "\\\""))" with administrator privileges
+            """
+            return try await withCheckedThrowingContinuation { continuation in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let process = Process()
+                    let outputPipe = Pipe()
+                    let errorPipe = Pipe()
+                    process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+                    process.arguments = ["-e", script]
+                    process.standardOutput = outputPipe
+                    process.standardError = errorPipe
+                    do {
+                        try process.run()
+                        process.waitUntilExit()
+                        let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                        let error = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                        continuation.resume(returning: ShellResult(output: output, error: error, exitCode: process.terminationStatus))
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
+                }
+            }
+        }
         
+        // Primary path: pipe stored password to sudo -S (no GUI prompt)
         return try await withCheckedThrowingContinuation { continuation in
-            let process = Process()
-            let outputPipe = Pipe()
-            let errorPipe = Pipe()
-            
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            process.arguments = ["-e", script]
-            process.standardOutput = outputPipe
-            process.standardError = errorPipe
-            
-            do {
-                try process.run()
-                process.waitUntilExit()
+            DispatchQueue.global(qos: .userInitiated).async {
+                let process = Process()
+                let inputPipe = Pipe()
+                let outputPipe = Pipe()
+                let errorPipe = Pipe()
                 
-                let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-                let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
+                process.arguments = ["-S", "/bin/zsh", "-c", command]
+                process.standardInput = inputPipe
+                process.standardOutput = outputPipe
+                process.standardError = errorPipe
                 
-                let output = String(data: outputData, encoding: .utf8) ?? ""
-                let error = String(data: errorData, encoding: .utf8) ?? ""
-                
-                continuation.resume(returning: ShellResult(
-                    output: output,
-                    error: error,
-                    exitCode: process.terminationStatus
-                ))
-            } catch {
-                continuation.resume(throwing: error)
+                do {
+                    try process.run()
+                    
+                    let passwordData = (password + "\n").data(using: .utf8)!
+                    inputPipe.fileHandleForWriting.write(passwordData)
+                    inputPipe.fileHandleForWriting.closeFile()
+                    
+                    process.waitUntilExit()
+                    
+                    let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                    let error = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                    
+                    continuation.resume(returning: ShellResult(
+                        output: output,
+                        error: error,
+                        exitCode: process.terminationStatus
+                    ))
+                } catch {
+                    continuation.resume(throwing: error)
+                }
             }
         }
     }
