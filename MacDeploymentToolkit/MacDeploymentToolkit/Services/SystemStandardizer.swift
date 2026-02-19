@@ -81,17 +81,24 @@ class SystemStandardizer {
     /// Apps matching these names will be preserved in the dock during cleanup.
     var catalogAppNames: Set<String> = []
     
+    /// In-memory set of app labels we've added to the dock during this session.
+    /// Used to prevent duplicates without reading the plist (which may be stale).
+    private var dockLabelsAdded: Set<String> = []
+    
     private func configureDockApps() async throws {
-        // Read current dock apps natively so we can preserve catalog apps
-        let preservedEntries = readCurrentDockEntries(preserving: catalogAppNames)
+        // Read current dock apps BEFORE clearing, so we can preserve catalog apps
+        let preservedPaths = readCurrentDockAppPaths(preserving: catalogAppNames)
         
-        // Clear the dock
+        // Reset in-memory tracking
+        dockLabelsAdded.removeAll()
+        
+        // Clear the dock completely using defaults (cfprefsd)
         _ = try await runShellCommand("defaults delete com.apple.dock persistent-apps 2>/dev/null || true")
         _ = try await runShellCommand("defaults write com.apple.dock persistent-apps -array")
         
-        // Re-add preserved catalog apps first by writing their original plist entries back
-        for entry in preservedEntries {
-            try await addDockEntryFromDict(entry)
+        // Re-add preserved catalog apps first (using defaults write -array-add, same mechanism)
+        for path in preservedPaths {
+            try await addAppToDockInternal(appPath: path)
         }
         
         // Standard apps to add to dock (after catalog apps)
@@ -113,8 +120,9 @@ class SystemStandardizer {
     }
     
     /// Read current dock persistent-apps directly from the plist file using Foundation.
-    /// Returns the raw plist dictionaries for entries whose app names match the catalog.
-    private func readCurrentDockEntries(preserving catalogNames: Set<String>) -> [[String: Any]] {
+    /// Returns the .app paths for entries whose names match the catalog.
+    /// Must be called BEFORE clearing the dock with `defaults delete`.
+    private func readCurrentDockAppPaths(preserving catalogNames: Set<String>) -> [String] {
         guard !catalogNames.isEmpty else { return [] }
         
         let plistPath = fileManager.homeDirectoryForCurrentUser
@@ -126,29 +134,29 @@ class SystemStandardizer {
         }
         
         let catalogNamesLower = Set(catalogNames.map { $0.lowercased() })
-        var preserved: [[String: Any]] = []
+        var preserved: [String] = []
         
         for entry in persistentApps {
             guard let tileData = entry["tile-data"] as? [String: Any] else { continue }
             
-            // Try to match by file-label first
-            if let label = tileData["file-label"] as? String {
-                let labelLower = label.lowercased()
-                if catalogNamesLower.contains(where: { labelLower.contains($0) || $0.contains(labelLower) }) {
-                    preserved.append(entry)
-                    continue
-                }
-            }
+            // Get the app path from file-data
+            guard let fileData = tileData["file-data"] as? [String: Any],
+                  let urlString = fileData["_CFURLString"] as? String else { continue }
             
-            // Fall back to matching by path
-            if let fileData = tileData["file-data"] as? [String: Any],
-               let urlString = fileData["_CFURLString"] as? String {
-                let cleanPath = urlString.hasSuffix("/") ? String(urlString.dropLast()) : urlString
-                let appName = (cleanPath as NSString).lastPathComponent
-                    .replacingOccurrences(of: ".app", with: "")
-                    .lowercased()
-                if catalogNamesLower.contains(where: { appName.contains($0) || $0.contains(appName) }) {
-                    preserved.append(entry)
+            let cleanPath = urlString.hasSuffix("/") ? String(urlString.dropLast()) : urlString
+            
+            // Try to match by file-label first, then by path
+            let label = (tileData["file-label"] as? String ?? "").lowercased()
+            let appName = (cleanPath as NSString).lastPathComponent
+                .replacingOccurrences(of: ".app", with: "")
+                .lowercased()
+            
+            let nameToCheck = !label.isEmpty ? label : appName
+            
+            if catalogNamesLower.contains(where: { nameToCheck.contains($0) || $0.contains(nameToCheck) }) {
+                // Verify the app still exists on disk before preserving
+                if fileManager.fileExists(atPath: cleanPath) {
+                    preserved.append(cleanPath)
                 }
             }
         }
@@ -156,64 +164,33 @@ class SystemStandardizer {
         return preserved
     }
     
-    /// Write a preserved dock entry back using its original plist XML
-    private func addDockEntryFromDict(_ entry: [String: Any]) async throws {
-        // Serialize the entry to XML plist format
-        guard let data = try? PropertyListSerialization.data(fromPropertyList: entry, format: .xml, options: 0),
-              let xmlString = String(data: data, encoding: .utf8) else { return }
-        
-        // Write to a temp file then use defaults import-style approach
-        let tempPath = fileManager.temporaryDirectory.appendingPathComponent("dock_entry_\(UUID().uuidString).plist").path
-        fileManager.createFile(atPath: tempPath, contents: data)
-        defer { try? fileManager.removeItem(atPath: tempPath) }
-        
-        // Use PlistBuddy to add the entry to persistent-apps array
-        let cmd = "/usr/libexec/PlistBuddy -c 'Add :persistent-apps: dict' ~/Library/Preferences/com.apple.dock.plist 2>/dev/null; /usr/libexec/PlistBuddy -c 'Merge \(tempPath) :persistent-apps:' ~/Library/Preferences/com.apple.dock.plist 2>/dev/null || true"
-        _ = try await runShellCommand(cmd)
-    }
-    
-    /// Returns the set of app labels currently in the dock (read natively)
-    func getCurrentDockAppLabels() -> Set<String> {
-        let plistPath = fileManager.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Preferences/com.apple.dock.plist").path
-        
-        guard let dockDict = NSDictionary(contentsOfFile: plistPath),
-              let persistentApps = dockDict["persistent-apps"] as? [[String: Any]] else {
-            return []
-        }
-        
-        var labels = Set<String>()
-        for entry in persistentApps {
-            if let tileData = entry["tile-data"] as? [String: Any],
-               let label = tileData["file-label"] as? String, !label.isEmpty {
-                labels.insert(label.lowercased())
-            }
-        }
-        return labels
-    }
-    
-    /// Add an application to the Dock, skipping if it's already present.
-    /// Uses XML plist with _CFURLStringType=0 (POSIX path) to prevent question mark icons.
+    /// Add an application to the Dock, skipping if already added this session.
+    /// Uses in-memory tracking (not plist reading) to prevent duplicates reliably.
     func addAppToDock(appPath: String) async throws {
         guard fileManager.fileExists(atPath: appPath) else { return }
         
-        // Check if already in dock to prevent duplicates
         let appLabel = (appPath as NSString).lastPathComponent
             .replacingOccurrences(of: ".app", with: "")
             .lowercased()
-        let currentLabels = getCurrentDockAppLabels()
-        if currentLabels.contains(appLabel) { return }
         
-        try await addAppToDockUnchecked(appPath: appPath)
+        // Check in-memory set to prevent duplicates
+        if dockLabelsAdded.contains(appLabel) { return }
+        
+        try await addAppToDockInternal(appPath: appPath)
     }
     
-    /// Add an application to the Dock unconditionally (no duplicate check).
-    /// Used when rebuilding the dock from scratch (duplicates impossible).
-    private func addAppToDockUnchecked(appPath: String) async throws {
+    /// Add an application to the Dock using `defaults write -array-add` and track it in memory.
+    private func addAppToDockInternal(appPath: String) async throws {
+        let appLabel = (appPath as NSString).lastPathComponent
+            .replacingOccurrences(of: ".app", with: "")
+        
         let addCommand = """
-        defaults write com.apple.dock persistent-apps -array-add '<dict><key>tile-data</key><dict><key>file-data</key><dict><key>_CFURLString</key><string>\(appPath)</string><key>_CFURLStringType</key><integer>0</integer></dict><key>file-label</key><string>\((appPath as NSString).lastPathComponent.replacingOccurrences(of: ".app", with: ""))</string></dict><key>tile-type</key><string>file-tile</string></dict>'
+        defaults write com.apple.dock persistent-apps -array-add '<dict><key>tile-data</key><dict><key>file-data</key><dict><key>_CFURLString</key><string>\(appPath)</string><key>_CFURLStringType</key><integer>0</integer></dict><key>file-label</key><string>\(appLabel)</string></dict><key>tile-type</key><string>file-tile</string></dict>'
         """
         _ = try await runShellCommand(addCommand)
+        
+        // Track in memory so addAppToDock() can detect duplicates without reading plist
+        dockLabelsAdded.insert(appLabel.lowercased())
     }
 
     private func restartDock() async throws {
