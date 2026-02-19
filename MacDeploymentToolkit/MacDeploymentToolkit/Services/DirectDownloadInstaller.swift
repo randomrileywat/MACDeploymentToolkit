@@ -118,22 +118,24 @@ class DirectDownloadInstaller {
             }
         }
         
-        // Look for .app or .pkg in the mounted volume
+        // Look for .pkg or .app in the mounted volume
         let contents = try fileManager.contentsOfDirectory(at: mountPoint, includingPropertiesForKeys: nil)
         
-        // Check for .app first
+        // Check for .pkg installer FIRST (common for Blackmagic, driver packages, etc.)
+        // Many DMGs contain an installer .app alongside a .pkg — the .pkg is the proper
+        // installation method, while the .app is just a GUI wrapper or uninstaller.
+        if let pkgInstaller = contents.first(where: { $0.pathExtension == "pkg" }) {
+            try await installFromPKG(pkgInstaller)
+            return
+        }
+        
+        // Fall back to .app bundle (simple drag-and-drop style DMGs)
         if let appBundle = contents.first(where: { $0.pathExtension == "app" }) {
             let destination = URL(fileURLWithPath: "/Applications").appendingPathComponent(appBundle.lastPathComponent)
             if fileManager.fileExists(atPath: destination.path) {
                 try fileManager.removeItem(at: destination)
             }
             try fileManager.copyItem(at: appBundle, to: destination)
-            return
-        }
-        
-        // Check for .pkg installer (common for Blackmagic, etc.)
-        if let pkgInstaller = contents.first(where: { $0.pathExtension == "pkg" }) {
-            try await installFromPKG(pkgInstaller)
             return
         }
         

@@ -85,8 +85,8 @@ class SystemStandardizer {
         _ = try await runShellCommand("defaults write com.apple.dock persistent-apps -array")
         
         // List of apps to add to dock
+        // Note: Finder is always shown by macOS — do NOT add it here or it appears twice
         let dockApps: [(name: String, path: String)] = [
-            ("Finder", "/System/Library/CoreServices/Finder.app"),
             ("Chrome", "/Applications/Google Chrome.app"),
             ("Terminal", "/Applications/Utilities/Terminal.app"),
             ("System Preferences", "/System/Applications/System Preferences.app"),
@@ -282,9 +282,10 @@ class SystemStandardizer {
         
         let textSize = (computerName as NSString).size(withAttributes: textAttributes)
         let margin: CGFloat = 100
+        // Shift left and down slightly to better match the icon placement feel
         let textRect = CGRect(
-            x: margin,
-            y: margin,
+            x: margin - 15,
+            y: margin - 15,
             width: textSize.width,
             height: textSize.height
         )

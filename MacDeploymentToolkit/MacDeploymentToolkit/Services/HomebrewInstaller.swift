@@ -268,7 +268,10 @@ class HomebrewInstaller {
             let errorPipe = Pipe()
             
             process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            process.arguments = ["-c", command]
+            // Use login shell (-l) so that the user's .zprofile is sourced.
+            // This ensures Homebrew is in PATH for brew's own subprocesses
+            // (e.g., Ruby scripts that call `brew` by bare name during cask installs).
+            process.arguments = ["-l", "-c", command]
             process.standardOutput = outputPipe
             process.standardError = errorPipe
             process.environment = ProcessInfo.processInfo.environment
