@@ -225,8 +225,11 @@ class DirectDownloadInstaller {
             throw DirectDownloadError.extractFailed(zipPath.lastPathComponent, result.error)
         }
         
-        // Find and install .app bundle
-        let appBundle = try findAppBundle(in: extractDir, name: appName)
+        // Find and install .app bundle from extracted contents
+        let extractedContents = try fileManager.contentsOfDirectory(at: extractDir, includingPropertiesForKeys: nil)
+        guard let appBundle = extractedContents.first(where: { $0.pathExtension == "app" }) else {
+            throw DirectDownloadError.extractFailed(zipPath.lastPathComponent, "No .app bundle found in ZIP")
+        }
         let destination = URL(fileURLWithPath: "/Applications").appendingPathComponent(appBundle.lastPathComponent)
         
         if fileManager.fileExists(atPath: destination.path) {
