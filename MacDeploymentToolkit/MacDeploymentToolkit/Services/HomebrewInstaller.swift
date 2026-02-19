@@ -36,6 +36,46 @@ class HomebrewInstaller {
         return brewPath
     }
     
+    // MARK: - Sudo Askpass Helper
+    
+    /// Path to the temporary askpass script (provides password to sudo when no terminal is available)
+    private var askpassScriptPath: String?
+    
+    /// Returns the path to a temporary askpass helper script, creating it if needed.
+    /// When sudo cannot find a terminal (our case — spawned from an app), it checks
+    /// the SUDO_ASKPASS environment variable for a program that prints the password.
+    /// This allows brew's internal sudo calls (e.g., pkg installers) to authenticate.
+    private func getOrCreateAskpassScript() -> String? {
+        if let existing = askpassScriptPath, FileManager.default.fileExists(atPath: existing) {
+            return existing
+        }
+        
+        guard let password = adminPassword else { return nil }
+        
+        let tempDir = FileManager.default.temporaryDirectory
+        let scriptPath = tempDir.appendingPathComponent("mdt_askpass_\(ProcessInfo.processInfo.processIdentifier)").path
+        
+        let escapedPassword = password.replacingOccurrences(of: "'", with: "'\\''")
+        let script = "#!/bin/bash\necho '\(escapedPassword)'\n"
+        
+        // Write with restricted permissions (owner read+execute only)
+        FileManager.default.createFile(
+            atPath: scriptPath,
+            contents: script.data(using: .utf8),
+            attributes: [.posixPermissions: 0o700]
+        )
+        askpassScriptPath = scriptPath
+        return scriptPath
+    }
+    
+    /// Remove the temporary askpass script (contains plaintext password)
+    func cleanupAskpassScript() {
+        if let path = askpassScriptPath {
+            try? FileManager.default.removeItem(atPath: path)
+            askpassScriptPath = nil
+        }
+    }
+    
     // MARK: - Homebrew Management
     
     /// Check if Homebrew is installed by trying to run the brew binary directly.
@@ -70,6 +110,11 @@ class HomebrewInstaller {
         }
         
         let escapedPassword = password.replacingOccurrences(of: "'", with: "'\\''")
+        
+        // Create askpass helper so sudo calls inside the installer can re-authenticate
+        // if the initial sudo -v timestamp expires during the download phase
+        let askpass = getOrCreateAskpassScript()
+        
         let installCommand = """
         echo '\(escapedPassword)' | sudo -S -v 2>/dev/null && \
         NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
@@ -89,6 +134,11 @@ class HomebrewInstaller {
                 
                 var env = ProcessInfo.processInfo.environment
                 env["NONINTERACTIVE"] = "1"
+                // SUDO_ASKPASS lets sudo re-authenticate without a terminal
+                // when the initial sudo -v timestamp expires during long downloads
+                if let askpass = askpass {
+                    env["SUDO_ASKPASS"] = askpass
+                }
                 process.environment = env
                 
                 // Stream stderr (where the installer writes progress) to debugLog
@@ -141,15 +191,23 @@ class HomebrewInstaller {
             }
         }
         
-        if result.exitCode != 0 {
+        // Re-detect the brew path — even if the installer reported errors,
+        // brew may have been installed successfully (e.g., the /etc/paths.d step
+        // can fail after brew itself is fully functional)
+        cachedBrewPath = nil
+        let found = await isHomebrewInstalled()
+        
+        if !found && result.exitCode != 0 {
             throw HomebrewError.installationFailed("\(result.error)\n\(result.output)")
         }
         
-        // After installing, re-detect the brew path so subsequent commands work
-        cachedBrewPath = nil
-        let found = await isHomebrewInstalled()
         if !found {
             throw HomebrewError.installationFailed("Homebrew installer completed but brew binary not found at expected paths.")
+        }
+        
+        if result.exitCode != 0 {
+            // Installer had errors but brew is functional — log warning and continue
+            debugLog?("  ⚠ Homebrew installer exited with warnings, but brew is functional")
         }
     }
     
@@ -353,6 +411,11 @@ class HomebrewInstaller {
             env["HOMEBREW_CELLAR"] = "\(homebrewPrefix)/Cellar"
             env["HOMEBREW_REPOSITORY"] = homebrewPrefix
             env["PATH"] = "\(homebrewPrefix)/bin:\(homebrewPrefix)/sbin:/usr/bin:/bin:/usr/sbin:/sbin:\(env["PATH"] ?? "")"
+            // Provide askpass helper so brew's internal sudo calls (e.g., cask pkg
+            // installers like Dante Controller) can authenticate without a terminal
+            if let askpass = self?.getOrCreateAskpassScript() {
+                env["SUDO_ASKPASS"] = askpass
+            }
             process.environment = env
             
             // Stream output for real-time progress

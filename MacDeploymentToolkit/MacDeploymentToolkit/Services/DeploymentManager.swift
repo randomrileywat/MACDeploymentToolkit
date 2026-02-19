@@ -284,6 +284,7 @@ class DeploymentManager: ObservableObject {
         
         // Stop the sudo keepalive process and release credentials
         stopSudoKeepalive()
+        homebrewInstaller.cleanupAskpassScript()
         log("✓ Admin privileges released", color: .logGray)
         
         log("=== Deployment Complete ===", color: .logCyan)
