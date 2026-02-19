@@ -59,7 +59,9 @@ class NetworkMonitor: ObservableObject {
     }
     
     /// Perform a connectivity check using SystemConfiguration (synchronous)
-    func performConnectivityCheckSync() -> Bool {
+    /// Marked nonisolated because it only uses SystemConfiguration APIs and
+    /// does not access any @MainActor-isolated state.
+    nonisolated func performConnectivityCheckSync() -> Bool {
         var zeroAddress = sockaddr_in()
         zeroAddress.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
         zeroAddress.sin_family = sa_family_t(AF_INET)

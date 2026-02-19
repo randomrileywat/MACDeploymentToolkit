@@ -512,9 +512,6 @@ class DeploymentManager: ObservableObject {
         let fm = FileManager.default
         let searchLower = app.name.lowercased()
         
-        // Also check the Homebrew packageToAppName mapping for known app bundle names
-        let knownNames = [app.name]
-        
         let directories = [
             "/Applications",
             fm.homeDirectoryForCurrentUser.appendingPathComponent("Applications").path

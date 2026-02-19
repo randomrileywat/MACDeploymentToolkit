@@ -208,21 +208,7 @@ class SystemStandardizer {
             usingDefaultLogo = true
         }
         
-        if var image = iconImage {
-            // When using the default logo on a black wallpaper, tint it white for visibility.
-            // This uses compositing: fill a white rectangle, then apply .destinationIn with the
-            // original image's alpha channel to produce a white silhouette of the logo.
-            if usingDefaultLogo {
-                let tintedImage = NSImage(size: image.size)
-                tintedImage.lockFocus()
-                let logoRect = NSRect(origin: .zero, size: image.size)
-                NSColor.white.setFill()
-                NSBezierPath(rect: logoRect).fill()
-                image.draw(in: logoRect, from: .zero, operation: .destinationIn, fraction: 1.0)
-                tintedImage.unlockFocus()
-                image = tintedImage
-            }
-            
+        if let image = iconImage {
             let iconSize: CGFloat = 150
             let iconMargin: CGFloat = 50
             let iconRect = CGRect(
@@ -233,7 +219,49 @@ class SystemStandardizer {
             )
             
             if let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
-                context.draw(cgImage, in: iconRect)
+                if usingDefaultLogo {
+                    // Tint the logo white by direct pixel manipulation:
+                    // For each pixel, set R=G=B=alpha (premultiplied white) while keeping alpha.
+                    // This produces a white silhouette of the logo on its transparent background.
+                    let w = cgImage.width
+                    let h = cgImage.height
+                    let tintColorSpace = CGColorSpaceCreateDeviceRGB()
+                    if let tintCtx = CGContext(
+                        data: nil,
+                        width: w,
+                        height: h,
+                        bitsPerComponent: 8,
+                        bytesPerRow: w * 4,
+                        space: tintColorSpace,
+                        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                    ) {
+                        // Draw original image to get pixel data
+                        tintCtx.draw(cgImage, in: CGRect(x: 0, y: 0, width: w, height: h))
+                        
+                        if let pixelData = tintCtx.data {
+                            let pixels = pixelData.bindMemory(to: UInt8.self, capacity: w * h * 4)
+                            // RGBA premultiplied: white = (a, a, a, a) in premultiplied form
+                            for i in 0..<(w * h) {
+                                let offset = i * 4
+                                let alpha = pixels[offset + 3]
+                                pixels[offset + 0] = alpha  // R = white * alpha
+                                pixels[offset + 1] = alpha  // G = white * alpha
+                                pixels[offset + 2] = alpha  // B = white * alpha
+                            }
+                        }
+                        
+                        if let whiteLogo = tintCtx.makeImage() {
+                            context.draw(whiteLogo, in: iconRect)
+                        } else {
+                            // Fallback: draw original if tinting fails
+                            context.draw(cgImage, in: iconRect)
+                        }
+                    } else {
+                        context.draw(cgImage, in: iconRect)
+                    }
+                } else {
+                    context.draw(cgImage, in: iconRect)
+                }
             }
         }
         
@@ -280,6 +308,24 @@ class SystemStandardizer {
     }
     
     private func setWallpaper(imagePath: String) async throws {
+        let url = URL(fileURLWithPath: imagePath)
+        
+        // Primary: use NSWorkspace API (reliable across macOS versions)
+        var nsWorkspaceSucceeded = false
+        for screen in NSScreen.screens {
+            do {
+                try NSWorkspace.shared.setDesktopImageURL(url, for: screen, options: [:])
+                nsWorkspaceSucceeded = true
+            } catch {
+                // Will try AppleScript fallback below
+            }
+        }
+        
+        if nsWorkspaceSucceeded {
+            return
+        }
+        
+        // Fallback: AppleScript via System Events
         let script = """
         tell application "System Events"
             tell every desktop

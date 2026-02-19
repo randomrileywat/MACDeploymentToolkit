@@ -18,21 +18,51 @@ class HomebrewInstaller {
     /// Admin password set by DeploymentManager after initial prompt; used for sudo -S
     var adminPassword: String?
     
+    /// Cached resolved path to the brew binary (found once and reused)
+    private var cachedBrewPath: String?
+    
+    /// Returns the full absolute path to the brew binary.
+    /// Uses cached path if available, otherwise checks standard paths and `which brew`.
     private var effectiveBrewPath: String {
+        if let cached = cachedBrewPath {
+            return cached
+        }
         if FileManager.default.fileExists(atPath: brewPath) {
+            cachedBrewPath = brewPath
             return brewPath
         } else if FileManager.default.fileExists(atPath: brewPathIntel) {
+            cachedBrewPath = brewPathIntel
             return brewPathIntel
         }
-        return "brew" // Fall back to PATH lookup
+        // Should not reach here if isHomebrewInstalled() was called first
+        return brewPath // Default to ARM path rather than bare "brew"
     }
     
     // MARK: - Homebrew Management
     
-    /// Check if Homebrew is installed
+    /// Check if Homebrew is installed, caching the resolved path for later use.
+    /// Checks standard paths first, then falls back to `which brew` via shell.
     func isHomebrewInstalled() async -> Bool {
-        return FileManager.default.fileExists(atPath: brewPath) ||
-               FileManager.default.fileExists(atPath: brewPathIntel)
+        // Check standard ARM path
+        if FileManager.default.fileExists(atPath: brewPath) {
+            cachedBrewPath = brewPath
+            return true
+        }
+        // Check standard Intel path
+        if FileManager.default.fileExists(atPath: brewPathIntel) {
+            cachedBrewPath = brewPathIntel
+            return true
+        }
+        // Fallback: find brew via shell (handles non-standard installations)
+        do {
+            let result = try await runShellCommand("which brew 2>/dev/null || command -v brew 2>/dev/null")
+            let path = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !path.isEmpty {
+                cachedBrewPath = path
+                return true
+            }
+        } catch {}
+        return false
     }
     
     /// Install Homebrew
