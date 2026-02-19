@@ -38,49 +38,46 @@ class HomebrewInstaller {
     
     // MARK: - Homebrew Management
     
-    /// Check if Homebrew is installed, caching the resolved path for later use.
-    /// Uses shell-based checks instead of FileManager because the app sandbox
-    /// can block FileManager.fileExists() for paths like /opt/homebrew/bin/brew.
+    /// Check if Homebrew is installed by trying to run the brew binary directly.
+    /// This is the most reliable method — no shell, no PATH, no sandbox issues.
     func isHomebrewInstalled() async -> Bool {
-        // Use shell `test -x` to check if brew exists and is executable.
-        // This works even when FileManager is blocked by the app sandbox.
-        // Include BOTH ARM and Intel paths in the shell PATH to find brew.
-        let checkScript = """
-        if [ -x /opt/homebrew/bin/brew ]; then echo /opt/homebrew/bin/brew; \
-        elif [ -x /usr/local/bin/brew ]; then echo /usr/local/bin/brew; \
-        else exit 1; fi
-        """
-        do {
-            let result = try await runShellCommandRaw(checkScript)
-            let path = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
-            if result.exitCode == 0 && path.hasPrefix("/") {
-                cachedBrewPath = path
-                return true
+        // Try ARM path first (Apple Silicon), then Intel path
+        for path in [brewPath, brewPathIntel] {
+            guard FileManager.default.fileExists(atPath: path) else { continue }
+            
+            // Set the cached path so runBrewCommand uses this path
+            cachedBrewPath = path
+            
+            // Verify it's actually executable by running it
+            do {
+                let result = try await runBrewCommand(["--version"])
+                if result.exitCode == 0 {
+                    return true
+                }
+            } catch {
+                // This path didn't work, try next
             }
-        } catch {}
+        }
+        cachedBrewPath = nil
         return false
     }
     
     /// Install Homebrew non-interactively using the stored admin password.
-    /// Pre-authenticates sudo in the same shell session so the installer's
-    /// internal sudo calls reuse the cached credentials.
+    /// Pre-authenticates sudo, then streams installer output to the debugLog callback.
     func installHomebrew() async throws {
         guard let password = adminPassword else {
             throw HomebrewError.installationFailed("No admin password available. Cannot install Homebrew non-interactively.")
         }
         
-        // Strategy: pipe password to `sudo -S -v` to cache credentials in THIS shell,
-        // then immediately run the Homebrew installer in the same shell session.
-        // The installer's internal sudo calls will reuse the cached credentials.
-        // NONINTERACTIVE=1 tells the installer to skip interactive prompts.
         let escapedPassword = password.replacingOccurrences(of: "'", with: "'\\''")
         let installCommand = """
         echo '\(escapedPassword)' | sudo -S -v 2>/dev/null && \
         NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
         """
         
+        // Run with streaming output so progress appears in the deployment log
         let result = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<ShellResult, Error>) in
-            DispatchQueue.global(qos: .userInitiated).async {
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 let process = Process()
                 let outputPipe = Pipe()
                 let errorPipe = Pipe()
@@ -94,19 +91,51 @@ class HomebrewInstaller {
                 env["NONINTERACTIVE"] = "1"
                 process.environment = env
                 
+                // Stream stderr (where the installer writes progress) to debugLog
+                var allOutput = ""
+                var allError = ""
+                
+                errorPipe.fileHandleForReading.readabilityHandler = { handle in
+                    let data = handle.availableData
+                    guard !data.isEmpty else { return }
+                    if let line = String(data: data, encoding: .utf8) {
+                        allError += line
+                        // Send meaningful lines to the deployment log
+                        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !trimmed.isEmpty && !trimmed.contains("Password:") {
+                            self?.debugLog?("  \(trimmed)")
+                        }
+                    }
+                }
+                
+                outputPipe.fileHandleForReading.readabilityHandler = { handle in
+                    let data = handle.availableData
+                    guard !data.isEmpty else { return }
+                    if let line = String(data: data, encoding: .utf8) {
+                        allOutput += line
+                        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !trimmed.isEmpty {
+                            self?.debugLog?("  \(trimmed)")
+                        }
+                    }
+                }
+                
                 do {
                     try process.run()
                     process.waitUntilExit()
                     
-                    let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-                    let error = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                    // Clean up handlers
+                    outputPipe.fileHandleForReading.readabilityHandler = nil
+                    errorPipe.fileHandleForReading.readabilityHandler = nil
                     
                     continuation.resume(returning: ShellResult(
-                        output: output,
-                        error: error,
+                        output: allOutput,
+                        error: allError,
                         exitCode: process.terminationStatus
                     ))
                 } catch {
+                    outputPipe.fileHandleForReading.readabilityHandler = nil
+                    errorPipe.fileHandleForReading.readabilityHandler = nil
                     continuation.resume(throwing: error)
                 }
             }
@@ -302,44 +331,73 @@ class HomebrewInstaller {
     // MARK: - Shell Command Execution
     
     /// Runs the brew binary DIRECTLY as a process — no shell, no PATH lookup.
-    /// This is the most reliable way to invoke brew from a sandboxed/hardened app.
+    /// Streams output to debugLog in real-time for progress visibility.
     private func runBrewCommand(_ arguments: [String]) async throws -> ShellResult {
-        return try await withCheckedThrowingContinuation { continuation in
+        return try await withCheckedThrowingContinuation { [weak self] continuation in
             let process = Process()
             let outputPipe = Pipe()
             let errorPipe = Pipe()
             
+            let brewPath = self?.effectiveBrewPath ?? "/opt/homebrew/bin/brew"
+            
             // Execute brew directly — bypasses zsh, PATH, and shell entirely
-            process.executableURL = URL(fileURLWithPath: self.effectiveBrewPath)
+            process.executableURL = URL(fileURLWithPath: brewPath)
             process.arguments = arguments
             process.standardOutput = outputPipe
             process.standardError = errorPipe
             
             // Set Homebrew env vars so brew's internal Ruby scripts work correctly
             var env = ProcessInfo.processInfo.environment
-            let homebrewPrefix = self.effectiveBrewPath.contains("/opt/homebrew") ? "/opt/homebrew" : "/usr/local"
+            let homebrewPrefix = brewPath.contains("/opt/homebrew") ? "/opt/homebrew" : "/usr/local"
             env["HOMEBREW_PREFIX"] = homebrewPrefix
             env["HOMEBREW_CELLAR"] = "\(homebrewPrefix)/Cellar"
             env["HOMEBREW_REPOSITORY"] = homebrewPrefix
             env["PATH"] = "\(homebrewPrefix)/bin:\(homebrewPrefix)/sbin:/usr/bin:/bin:/usr/sbin:/sbin:\(env["PATH"] ?? "")"
             process.environment = env
             
+            // Stream output for real-time progress
+            var allOutput = ""
+            var allError = ""
+            
+            outputPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+                let data = handle.availableData
+                guard !data.isEmpty else { return }
+                if let text = String(data: data, encoding: .utf8) {
+                    allOutput += text
+                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty {
+                        self?.debugLog?("  \(trimmed)")
+                    }
+                }
+            }
+            
+            errorPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+                let data = handle.availableData
+                guard !data.isEmpty else { return }
+                if let text = String(data: data, encoding: .utf8) {
+                    allError += text
+                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty {
+                        self?.debugLog?("  \(trimmed)")
+                    }
+                }
+            }
+            
             do {
                 try process.run()
                 process.waitUntilExit()
                 
-                let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-                let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-                
-                let output = String(data: outputData, encoding: .utf8) ?? ""
-                let error = String(data: errorData, encoding: .utf8) ?? ""
+                outputPipe.fileHandleForReading.readabilityHandler = nil
+                errorPipe.fileHandleForReading.readabilityHandler = nil
                 
                 continuation.resume(returning: ShellResult(
-                    output: output,
-                    error: error,
+                    output: allOutput,
+                    error: allError,
                     exitCode: process.terminationStatus
                 ))
             } catch {
+                outputPipe.fileHandleForReading.readabilityHandler = nil
+                errorPipe.fileHandleForReading.readabilityHandler = nil
                 continuation.resume(throwing: error)
             }
         }
