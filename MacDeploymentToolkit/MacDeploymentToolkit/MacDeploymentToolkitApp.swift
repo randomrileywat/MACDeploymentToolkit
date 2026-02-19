@@ -20,7 +20,21 @@ struct MacDeploymentToolkitApp: App {
             ContentView()
                 .environmentObject(deploymentManager)
                 .environmentObject(networkMonitor)
-                .frame(width: 700, height: 680)
+        }
+        .windowResizabilityContentSize()
+    }
+}
+
+// MARK: - Window Resizability for macOS 11+ compatibility
+
+extension Scene {
+    /// Constrains the window to fit its content size, preventing extra padding/black bars
+    func windowResizabilityContentSize() -> some Scene {
+        if #available(macOS 13.0, *) {
+            return self.defaultSize(width: 700, height: 680)
+        } else {
+            return self
         }
     }
+}
 }

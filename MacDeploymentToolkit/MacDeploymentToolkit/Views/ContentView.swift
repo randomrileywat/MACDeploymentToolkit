@@ -14,7 +14,7 @@ struct ContentView: View {
     @State private var selectedApps: Set<UUID> = []
     @State private var expandedCategories: Set<ApplicationCategory> = Set(ApplicationCategory.allCases)
     @State private var macStandardizationEnabled = false
-    @State private var computerName: String = Host.current().localizedName ?? "Mac"
+    @State private var computerName: String = ContentView.cleanComputerName()
     @State private var customIconPath: String = ""
     
     private let primaryBlue = Color(red: 0, green: 0.47, blue: 0.83) // #0078D4
@@ -33,8 +33,37 @@ struct ContentView: View {
                 selectionView
             }
         }
-        .frame(width: 700, height: 680)
+        .frame(minWidth: 700, idealWidth: 700, maxWidth: 700,
+               minHeight: 680, idealHeight: 680, maxHeight: 680)
+        .fixedSize()
         .background(Color(NSColor.windowBackgroundColor))
+    }
+    
+    // MARK: - Computer Name Helper
+    
+    /// Strips "'s Mac Mini", "'s MacBook Pro", "'s iMac", etc. from the system computer name
+    static func cleanComputerName() -> String {
+        let rawName = Host.current().localizedName ?? "Mac"
+        
+        // Pattern: remove "'s <Mac variant>" suffix
+        // Handles: "'s Mac Mini", "'s MacBook Pro", "'s MacBook Air", "'s iMac", "'s Mac Pro", "'s Mac Studio", "'s Mac", etc.
+        let patterns = [
+            "'s Mac Mini", "'s Mac mini",
+            "'s MacBook Pro", "'s MacBook Air", "'s MacBook",
+            "'s iMac Pro", "'s iMac",
+            "'s Mac Pro", "'s Mac Studio",
+            "'s Mac"  // Catch-all for any other Mac variant
+        ]
+        
+        var cleaned = rawName
+        for pattern in patterns {
+            if let range = cleaned.range(of: pattern, options: .caseInsensitive) {
+                cleaned = String(cleaned[cleaned.startIndex..<range.lowerBound])
+                break
+            }
+        }
+        
+        return cleaned.trimmingCharacters(in: .whitespaces)
     }
     
     // MARK: - Header View
