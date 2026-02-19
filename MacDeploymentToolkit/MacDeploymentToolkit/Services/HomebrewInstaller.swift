@@ -210,15 +210,13 @@ class HomebrewInstaller {
         let command: String
         switch type {
         case .cask:
-            // Use --force to overwrite existing installations
-            // Some casks require sudo for installation (e.g., ndi-tools, wireshark, resolume-arena)
-            // Use osascript with admin privileges to handle password prompt
+            // Run brew as the NORMAL USER (not under sudo).
+            // Homebrew does NOT like running as root and will fail or misbehave.
+            // Homebrew handles its own privilege escalation internally where needed
+            // (e.g., writing to /Applications). The sudo keepalive started by
+            // DeploymentManager ensures Homebrew's internal sudo calls succeed
+            // without prompting.
             command = "\(effectiveBrewPath) install --cask --force \(packageId)"
-            let result = try await runShellCommandWithElevation(command)
-            if result.exitCode != 0 {
-                throw HomebrewError.packageInstallFailed(packageId, result.error)
-            }
-            return
         case .formula:
             command = "\(effectiveBrewPath) install \(packageId)"
         }

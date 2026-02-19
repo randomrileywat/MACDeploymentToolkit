@@ -27,7 +27,7 @@ class NetworkMonitor: ObservableObject {
     
     init() {
         // Check immediately
-        isConnected = performConnectivityCheckSync()
+        isConnected = NetworkMonitor.checkConnectivity()
         // Then check every 5 seconds
         startMonitoring()
     }
@@ -39,10 +39,9 @@ class NetworkMonitor: ObservableObject {
     /// Start periodic network monitoring
     private func startMonitoring() {
         timer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] timer in
-            // Perform check synchronously since SCNetworkReachability is synchronous
-            // Note: performConnectivityCheckSync() is safe to call off-main because it
-            // only uses SCNetworkReachability (no actor-isolated state).
-            let connected = self?.performConnectivityCheckSync() ?? false
+            // Perform check off the main actor using a static method
+            // (avoids actor-isolation warnings from accessing self in non-isolated context)
+            let connected = NetworkMonitor.checkConnectivity()
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else {
                     timer.invalidate()
@@ -53,15 +52,9 @@ class NetworkMonitor: ObservableObject {
         }
     }
     
-    /// Check network connection using SCNetworkReachability
-    private func checkConnection() async {
-        isConnected = performConnectivityCheckSync()
-    }
-    
-    /// Perform a connectivity check using SystemConfiguration (synchronous)
-    /// Marked nonisolated because it only uses SystemConfiguration APIs and
-    /// does not access any @MainActor-isolated state.
-    nonisolated func performConnectivityCheckSync() -> Bool {
+    /// Static connectivity check using SystemConfiguration
+    /// Static to avoid @MainActor isolation issues when called from Timer closures
+    static func checkConnectivity() -> Bool {
         var zeroAddress = sockaddr_in()
         zeroAddress.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
         zeroAddress.sin_family = sa_family_t(AF_INET)

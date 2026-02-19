@@ -218,49 +218,53 @@ class SystemStandardizer {
                 height: iconSize
             )
             
-            if let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
-                if usingDefaultLogo {
-                    // Tint the logo white by direct pixel manipulation:
-                    // For each pixel, set R=G=B=alpha (premultiplied white) while keeping alpha.
-                    // This produces a white silhouette of the logo on its transparent background.
-                    let w = cgImage.width
-                    let h = cgImage.height
-                    let tintColorSpace = CGColorSpaceCreateDeviceRGB()
-                    if let tintCtx = CGContext(
-                        data: nil,
-                        width: w,
-                        height: h,
-                        bitsPerComponent: 8,
-                        bytesPerRow: w * 4,
-                        space: tintColorSpace,
-                        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-                    ) {
-                        // Draw original image to get pixel data
-                        tintCtx.draw(cgImage, in: CGRect(x: 0, y: 0, width: w, height: h))
-                        
-                        if let pixelData = tintCtx.data {
-                            let pixels = pixelData.bindMemory(to: UInt8.self, capacity: w * h * 4)
-                            // RGBA premultiplied: white = (a, a, a, a) in premultiplied form
-                            for i in 0..<(w * h) {
-                                let offset = i * 4
-                                let alpha = pixels[offset + 3]
-                                pixels[offset + 0] = alpha  // R = white * alpha
-                                pixels[offset + 1] = alpha  // G = white * alpha
-                                pixels[offset + 2] = alpha  // B = white * alpha
-                            }
-                        }
-                        
-                        if let whiteLogo = tintCtx.makeImage() {
-                            context.draw(whiteLogo, in: iconRect)
-                        } else {
-                            // Fallback: draw original if tinting fails
-                            context.draw(cgImage, in: iconRect)
-                        }
-                    } else {
-                        context.draw(cgImage, in: iconRect)
-                    }
+            if usingDefaultLogo {
+                // Tint the logo white using CGContext blend modes.
+                // This is more reliable than pixel manipulation because NSImage.cgImage()
+                // can return nil for asset catalog images.
+                // Strategy: create a temp NSImage, draw original, overlay white with .sourceAtop
+                // blend mode (which only draws where the destination has alpha).
+                let tintedSize = image.size
+                let tintedImage = NSImage(size: tintedSize)
+                tintedImage.lockFocus()
+                
+                // Draw the original logo
+                image.draw(in: NSRect(origin: .zero, size: tintedSize),
+                           from: .zero,
+                           operation: .copy,
+                           fraction: 1.0)
+                
+                // Overlay white, but only where the logo has alpha (sourceAtop)
+                NSColor.white.setFill()
+                NSRect(origin: .zero, size: tintedSize).fill(using: .sourceAtop)
+                
+                tintedImage.unlockFocus()
+                
+                // Draw the white-tinted logo into the wallpaper context
+                if let tintedCG = tintedImage.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+                    context.draw(tintedCG, in: iconRect)
                 } else {
+                    // Fallback: use NSGraphicsContext to draw directly
+                    context.saveGState()
+                    let tempNS = NSGraphicsContext(cgContext: context, flipped: false)
+                    NSGraphicsContext.saveGraphicsState()
+                    NSGraphicsContext.current = tempNS
+                    tintedImage.draw(in: iconRect, from: .zero, operation: .sourceOver, fraction: 1.0)
+                    NSGraphicsContext.restoreGraphicsState()
+                    context.restoreGState()
+                }
+            } else {
+                // Custom user-provided icon: draw as-is
+                if let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) {
                     context.draw(cgImage, in: iconRect)
+                } else {
+                    context.saveGState()
+                    let tempNS = NSGraphicsContext(cgContext: context, flipped: false)
+                    NSGraphicsContext.saveGraphicsState()
+                    NSGraphicsContext.current = tempNS
+                    image.draw(in: iconRect, from: .zero, operation: .sourceOver, fraction: 1.0)
+                    NSGraphicsContext.restoreGraphicsState()
+                    context.restoreGState()
                 }
             }
         }
