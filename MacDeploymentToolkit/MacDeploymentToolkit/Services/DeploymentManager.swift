@@ -180,6 +180,8 @@ class DeploymentManager: ObservableObject {
         // Step 3: Install Applications
         log("=== Installing Applications ===", color: .logCyan)
         
+        var newlyInstalledApps: [ApplicationDefinition] = []
+        
         for app in applications {
             updateTask(app.name, status: .inProgress, detail: "Checking...")
             currentStatus = "Checking \(app.name)..."
@@ -205,6 +207,7 @@ class DeploymentManager: ObservableObject {
                 updateTask(app.name, status: .success, detail: "Installed successfully")
                 log("✓ \(app.name) installed successfully", color: .logGreen)
                 successCount += 1
+                newlyInstalledApps.append(app)
                 
             } catch {
                 updateTask(app.name, status: .failed, detail: "Failed: \(error.localizedDescription)")
@@ -212,6 +215,48 @@ class DeploymentManager: ObservableObject {
                 failCount += 1
             }
             
+            log("")
+        }
+        
+        // Step 4: Pin newly installed apps to the Dock
+        if !newlyInstalledApps.isEmpty {
+            log("=== Pinning Applications to Dock ===", color: .logCyan)
+            currentStatus = "Pinning apps to Dock..."
+            
+            for app in newlyInstalledApps {
+                if let appPath = findInstalledAppPath(app) {
+                    do {
+                        try await systemStandardizer.addAppToDock(appPath: appPath)
+                        log("  • Pinned \(app.name) to Dock", color: .logGray)
+                    } catch {
+                        log("  • Could not pin \(app.name) to Dock", color: .logGray)
+                    }
+                }
+            }
+            
+            // Restart Dock to apply pinned apps
+            do {
+                _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
+                    DispatchQueue.global(qos: .userInitiated).async {
+                        let process = Process()
+                        let outputPipe = Pipe()
+                        process.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
+                        process.arguments = ["Dock"]
+                        process.standardOutput = outputPipe
+                        process.standardError = Pipe()
+                        do {
+                            try process.run()
+                            process.waitUntilExit()
+                            continuation.resume(returning: "")
+                        } catch {
+                            continuation.resume(throwing: error)
+                        }
+                    }
+                }
+                log("✓ Dock updated with new applications", color: .logGreen)
+            } catch {
+                log("⚠ Could not restart Dock", color: .logOrange)
+            }
             log("")
         }
         
@@ -360,12 +405,18 @@ class DeploymentManager: ObservableObject {
     
     /// Check if an application is already installed
     private func isApplicationInstalled(_ app: ApplicationDefinition) async -> Bool {
-        // First do a broad check: scan /Applications for a matching .app bundle
+        // First do a broad check: scan /Applications (including subdirectories) for a matching .app bundle
         // This handles cases where the installed app name differs slightly from catalog name
         if appExistsInApplications(app.name) {
             return true
         }
         
+        // Second: check via Spotlight (mdfind) — catches apps installed anywhere on the system
+        if await spotlightFindApp(app.name) {
+            return true
+        }
+        
+        // Third: for Homebrew apps, also check Homebrew's package list
         switch app.installMethod {
         case .homebrew(let type):
             guard let packageId = app.packageId else { return false }
@@ -382,36 +433,124 @@ class DeploymentManager: ObservableObject {
     /// Scan /Applications (and ~/Applications) for an app whose name contains the search term
     /// Does case-insensitive matching and handles partial names (e.g., "Blackmagic Desktop Video" matches
     /// "Blackmagic Desktop Video.app" or "Blackmagic Desktop Video Setup.app")
+    /// Also scans one level of subdirectories (e.g., /Applications/Renewed Vision/ProPresenter.app)
     private func appExistsInApplications(_ appName: String) -> Bool {
         let fm = FileManager.default
         let searchLower = appName.lowercased()
         
-        // Check /Applications
-        if let contents = try? fm.contentsOfDirectory(atPath: "/Applications") {
+        let directories = [
+            "/Applications",
+            fm.homeDirectoryForCurrentUser.appendingPathComponent("Applications").path
+        ]
+        
+        for dir in directories {
+            guard let contents = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            
             for item in contents {
+                let itemPath = (dir as NSString).appendingPathComponent(item)
+                
                 if item.hasSuffix(".app") {
                     let installedName = String(item.dropLast(4)).lowercased()  // strip .app
                     if installedName == searchLower || installedName.contains(searchLower) || searchLower.contains(installedName) {
                         return true
                     }
                 }
-            }
-        }
-        
-        // Check ~/Applications
-        let userApps = fm.homeDirectoryForCurrentUser.appendingPathComponent("Applications").path
-        if let contents = try? fm.contentsOfDirectory(atPath: userApps) {
-            for item in contents {
-                if item.hasSuffix(".app") {
-                    let installedName = String(item.dropLast(4)).lowercased()
-                    if installedName == searchLower || installedName.contains(searchLower) || searchLower.contains(installedName) {
-                        return true
+                
+                // Check subdirectories one level deep (e.g., /Applications/Renewed Vision/ProPresenter.app)
+                var isDir: ObjCBool = false
+                if fm.fileExists(atPath: itemPath, isDirectory: &isDir), isDir.boolValue, !item.hasSuffix(".app") {
+                    if let subContents = try? fm.contentsOfDirectory(atPath: itemPath) {
+                        for subItem in subContents {
+                            if subItem.hasSuffix(".app") {
+                                let subName = String(subItem.dropLast(4)).lowercased()
+                                if subName == searchLower || subName.contains(searchLower) || searchLower.contains(subName) {
+                                    return true
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
         
         return false
+    }
+    
+    /// Use Spotlight (mdfind) to search for an installed application anywhere on the system
+    private func spotlightFindApp(_ appName: String) async -> Bool {
+        do {
+            let result: String = try await withCheckedThrowingContinuation { continuation in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let process = Process()
+                    let outputPipe = Pipe()
+                    
+                    process.executableURL = URL(fileURLWithPath: "/usr/bin/mdfind")
+                    process.arguments = ["kMDItemContentTypeTree == 'com.apple.application-bundle' && kMDItemDisplayName == '*\(appName)*'cd"]
+                    process.standardOutput = outputPipe
+                    process.standardError = Pipe()
+                    
+                    do {
+                        try process.run()
+                        process.waitUntilExit()
+                        let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
+                        let output = String(data: data, encoding: .utf8) ?? ""
+                        continuation.resume(returning: output)
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
+                }
+            }
+            return !result.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        } catch {
+            return false
+        }
+    }
+    
+    /// Find the full path to an installed app in /Applications (including subdirectories)
+    /// Returns the first matching .app path, or nil if not found
+    private func findInstalledAppPath(_ app: ApplicationDefinition) -> String? {
+        let fm = FileManager.default
+        let searchLower = app.name.lowercased()
+        
+        // Also check the Homebrew packageToAppName mapping for known app bundle names
+        let knownNames = [app.name]
+        
+        let directories = [
+            "/Applications",
+            fm.homeDirectoryForCurrentUser.appendingPathComponent("Applications").path
+        ]
+        
+        for dir in directories {
+            guard let contents = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            
+            for item in contents {
+                let itemPath = (dir as NSString).appendingPathComponent(item)
+                
+                if item.hasSuffix(".app") {
+                    let installedName = String(item.dropLast(4)).lowercased()
+                    if installedName == searchLower || installedName.contains(searchLower) || searchLower.contains(installedName) {
+                        return itemPath
+                    }
+                }
+                
+                // Check subdirectories one level deep
+                var isDir: ObjCBool = false
+                if fm.fileExists(atPath: itemPath, isDirectory: &isDir), isDir.boolValue, !item.hasSuffix(".app") {
+                    if let subContents = try? fm.contentsOfDirectory(atPath: itemPath) {
+                        for subItem in subContents {
+                            if subItem.hasSuffix(".app") {
+                                let subName = String(subItem.dropLast(4)).lowercased()
+                                if subName == searchLower || subName.contains(searchLower) || searchLower.contains(subName) {
+                                    return (itemPath as NSString).appendingPathComponent(subItem)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        return nil
     }
     
     /// Install an application based on its installation method
@@ -423,7 +562,7 @@ class DeploymentManager: ObservableObject {
             }
             try await homebrewInstaller.install(packageId: packageId, type: type)
             
-        case .macAppStore(let appId):
+        case .macAppStore:
             // TODO: Implement mas-cli installation
             throw DeploymentError.notImplemented("Mac App Store installation")
             
@@ -484,12 +623,12 @@ class DeploymentManager: ObservableObject {
         friendlyMessage = friendlyMessages[0]
         
         friendlyMessageTimer = Timer.scheduledTimer(withTimeInterval: 8.0, repeats: true) { [weak self] timer in
-            guard let self = self else {
-                timer.invalidate()
-                return
-            }
-            let nextIndex = (self.currentMessageIndex + 1) % self.friendlyMessages.count
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else {
+                    timer.invalidate()
+                    return
+                }
+                let nextIndex = (self.currentMessageIndex + 1) % self.friendlyMessages.count
                 self.currentMessageIndex = nextIndex
                 self.friendlyMessage = self.friendlyMessages[nextIndex]
             }

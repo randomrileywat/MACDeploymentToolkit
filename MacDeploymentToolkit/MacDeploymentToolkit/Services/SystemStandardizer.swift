@@ -81,6 +81,9 @@ class SystemStandardizer {
         // First, completely clear the dock persistent apps
         _ = try await runShellCommand("defaults delete com.apple.dock persistent-apps 2>/dev/null || true")
         
+        // Re-initialize as empty array so -array-add works
+        _ = try await runShellCommand("defaults write com.apple.dock persistent-apps -array")
+        
         // List of apps to add to dock
         let dockApps: [(name: String, path: String)] = [
             ("Finder", "/System/Library/CoreServices/Finder.app"),
@@ -90,7 +93,7 @@ class SystemStandardizer {
             ("System Settings", "/System/Applications/System Settings.app")
         ]
         
-        // Add each app individually using the -array-add approach
+        // Add each app individually using XML plist format with proper _CFURLStringType
         for app in dockApps {
             // Skip Chrome if not installed (Safari intentionally NOT added)
             if app.name == "Chrome" && !fileManager.fileExists(atPath: app.path) {
@@ -106,12 +109,21 @@ class SystemStandardizer {
             
             // Only add if the app exists
             if fileManager.fileExists(atPath: app.path) {
-                let addCommand = """
-                defaults write com.apple.dock persistent-apps -array-add '{"tile-data"={"file-data"={"_CFURLString"="\(app.path)";};};}'
-                """
-                _ = try await runShellCommand(addCommand)
+                try await addAppToDock(appPath: app.path)
             }
         }
+    }
+    
+    /// Add an application to the Dock's persistent apps using proper plist format
+    /// Uses XML plist with _CFURLStringType=0 (POSIX path) to prevent question mark icons
+    func addAppToDock(appPath: String) async throws {
+        // Verify the app exists before adding
+        guard fileManager.fileExists(atPath: appPath) else { return }
+        
+        let addCommand = """
+        defaults write com.apple.dock persistent-apps -array-add '<dict><key>tile-data</key><dict><key>file-data</key><dict><key>_CFURLString</key><string>\(appPath)</string><key>_CFURLStringType</key><integer>0</integer></dict><key>file-label</key><string>\((appPath as NSString).lastPathComponent.replacingOccurrences(of: ".app", with: ""))</string></dict><key>tile-type</key><string>file-tile</string></dict>'
+        """
+        _ = try await runShellCommand(addCommand)
     }
 
     private func restartDock() async throws {
@@ -183,6 +195,7 @@ class SystemStandardizer {
         // Draw company icon in lower-right corner
         // Try custom path first, then fall back to bundled default logo
         var iconImage: NSImage? = nil
+        var usingDefaultLogo = false
         
         if let iconPath = customIconPath, !iconPath.isEmpty {
             iconImage = NSImage(contentsOfFile: iconPath)
@@ -192,14 +205,29 @@ class SystemStandardizer {
         if iconImage == nil {
             // Asset catalog images must be loaded via NSImage(named:), not Bundle path
             iconImage = NSImage(named: "DefaultLogo")
+            usingDefaultLogo = true
         }
         
-        if let image = iconImage {
+        if var image = iconImage {
+            // When using the default logo on a black wallpaper, tint it white for visibility.
+            // This uses compositing: fill a white rectangle, then apply .destinationIn with the
+            // original image's alpha channel to produce a white silhouette of the logo.
+            if usingDefaultLogo {
+                let tintedImage = NSImage(size: image.size)
+                tintedImage.lockFocus()
+                let logoRect = NSRect(origin: .zero, size: image.size)
+                NSColor.white.setFill()
+                NSBezierPath(rect: logoRect).fill()
+                image.draw(in: logoRect, from: .zero, operation: .destinationIn, fraction: 1.0)
+                tintedImage.unlockFocus()
+                image = tintedImage
+            }
+            
             let iconSize: CGFloat = 150
-            let margin: CGFloat = 50
+            let iconMargin: CGFloat = 50
             let iconRect = CGRect(
-                x: screenSize.width - iconSize - margin,
-                y: margin,
+                x: screenSize.width - iconSize - iconMargin,
+                y: iconMargin,
                 width: iconSize,
                 height: iconSize
             )
