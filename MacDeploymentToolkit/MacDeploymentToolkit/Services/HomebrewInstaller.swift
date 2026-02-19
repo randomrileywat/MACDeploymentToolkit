@@ -299,9 +299,13 @@ class HomebrewInstaller {
         }
     }
     
-    /// Injects Homebrew PATH into a command string so it survives sudo/osascript environment resets
+    /// Injects the full Homebrew shell environment into a command string.
+    /// Uses `brew shellenv` which sets PATH, HOMEBREW_PREFIX, HOMEBREW_CELLAR,
+    /// HOMEBREW_REPOSITORY, MANPATH, and INFOPATH. This is required because
+    /// brew's internal Ruby scripts call `brew` by bare name and expect the
+    /// full Homebrew environment to be configured.
     private func commandWithPath(_ command: String) -> String {
-        return "export PATH=/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:$PATH && \(command)"
+        return "eval \"$(\(effectiveBrewPath) shellenv)\" && \(command)"
     }
     
     private func runShellCommandWithElevation(_ command: String) async throws -> ShellResult {
