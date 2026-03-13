@@ -72,9 +72,9 @@ class DeploymentManager: ObservableObject {
     
     // MARK: - Deployment Control
     
-    /// Start the deployment process with selected applications and options
+    /// Start the deployment process with selected packages and options
     func startDeployment(
-        applications: [ApplicationDefinition],
+        packages: [PackageInfo],
         macStandardization: Bool,
         computerName: String,
         customIconPath: String?
@@ -94,8 +94,8 @@ class DeploymentManager: ObservableObject {
             tasks.append(DeploymentTask(name: "Mac Standardization", category: "System"))
         }
         
-        for app in applications {
-            tasks.append(DeploymentTask(name: app.name, category: app.category.rawValue))
+        for pkg in packages {
+            tasks.append(DeploymentTask(name: pkg.name, category: pkg.category))
         }
         
         // Start friendly messages
@@ -104,7 +104,7 @@ class DeploymentManager: ObservableObject {
         // Run deployment asynchronously
         Task {
             await runDeployment(
-                applications: applications,
+                packages: packages,
                 macStandardization: macStandardization,
                 computerName: computerName,
                 customIconPath: customIconPath
@@ -114,7 +114,7 @@ class DeploymentManager: ObservableObject {
     
     /// Main deployment execution
     private func runDeployment(
-        applications: [ApplicationDefinition],
+        packages: [PackageInfo],
         macStandardization: Bool,
         computerName: String,
         customIconPath: String?
@@ -123,6 +123,7 @@ class DeploymentManager: ObservableObject {
         
         log("=== Mac Deployment Started ===", color: .logCyan)
         log("Timestamp: \(formatDate(startTime))", color: .logGray)
+        log("Platform: \(PackageInfo.currentPlatform)", color: .logGray)
         log("")
         
         var successCount = 0
@@ -164,9 +165,9 @@ class DeploymentManager: ObservableObject {
             currentStatus = "Configuring system settings..."
             
             do {
-                // Pass all catalog app names so dock cleanup preserves them
-                let allCatalogNames = ApplicationCatalog.applications.values.flatMap { $0 }.map { $0.name }
-                systemStandardizer.catalogAppNames = Set(allCatalogNames)
+                // Pass all package names so dock cleanup preserves them
+                let allPackageNames = packages.map { $0.name }
+                systemStandardizer.catalogAppNames = Set(allPackageNames)
                 
                 try await systemStandardizer.applyStandardization(
                     computerName: computerName,
@@ -183,10 +184,7 @@ class DeploymentManager: ObservableObject {
         }
         
         // Step 2: Check for Homebrew if needed
-        let needsHomebrew = applications.contains { app in
-            if case .homebrew = app.installMethod { return true }
-            return false
-        }
+        let needsHomebrew = packages.contains { $0.installMethod == "brew" }
         
         if needsHomebrew {
             log("Checking for Homebrew availability...", color: .logYellow)
@@ -219,41 +217,41 @@ class DeploymentManager: ObservableObject {
             log("")
         }
         
-        // Step 3: Install Applications
+        // Step 3: Install Packages
         log("=== Installing Applications ===", color: .logCyan)
         
-        var newlyInstalledApps: [ApplicationDefinition] = []
+        var newlyInstalledPkgs: [PackageInfo] = []
         
-        for app in applications {
-            updateTask(app.name, status: .inProgress, detail: "Checking...")
-            currentStatus = "Checking \(app.name)..."
+        for pkg in packages {
+            updateTask(pkg.name, status: .inProgress, detail: "Checking...")
+            currentStatus = "Checking \(pkg.name)..."
             
             do {
-                // Check if already installed
-                let isInstalled = await isApplicationInstalled(app)
+                // Data-driven detection
+                let isInstalled = await checkIfInstalled(pkg)
                 
                 if isInstalled {
-                    updateTask(app.name, status: .success, detail: "Already installed")
-                    log("✓ \(app.name) is already installed", color: .logGreen)
+                    updateTask(pkg.name, status: .success, detail: "Already installed")
+                    log("✓ \(pkg.name) is already installed", color: .logGreen)
                     successCount += 1
                     continue
                 }
                 
-                // Install the application
-                updateTask(app.name, status: .inProgress, detail: "Installing...")
-                currentStatus = "Installing \(app.name)..."
-                log("Installing \(app.name)...", color: .logYellow)
+                // Data-driven installation
+                updateTask(pkg.name, status: .inProgress, detail: "Installing...")
+                currentStatus = "Installing \(pkg.name)..."
+                log("Installing \(pkg.name)...", color: .logYellow)
                 
-                try await installApplication(app)
+                try await installPackage(pkg)
                 
-                updateTask(app.name, status: .success, detail: "Installed successfully")
-                log("✓ \(app.name) installed successfully", color: .logGreen)
+                updateTask(pkg.name, status: .success, detail: "Installed successfully")
+                log("✓ \(pkg.name) installed successfully", color: .logGreen)
                 successCount += 1
-                newlyInstalledApps.append(app)
+                newlyInstalledPkgs.append(pkg)
                 
             } catch {
-                updateTask(app.name, status: .failed, detail: "Failed: \(error.localizedDescription)")
-                log("✗ \(app.name) failed: \(error.localizedDescription)", color: .logRed)
+                updateTask(pkg.name, status: .failed, detail: "Failed: \(error.localizedDescription)")
+                log("✗ \(pkg.name) failed: \(error.localizedDescription)", color: .logRed)
                 failCount += 1
             }
             
@@ -261,25 +259,25 @@ class DeploymentManager: ObservableObject {
         }
         
         // Step 4: Pin all successfully installed/detected apps to the Dock
-        let successfulApps = applications.filter { app in
-            tasks.first(where: { $0.name == app.name })?.status == .success
+        let successfulPkgs = packages.filter { pkg in
+            tasks.first(where: { $0.name == pkg.name })?.status == .success
         }
         
-        if !successfulApps.isEmpty {
+        if !successfulPkgs.isEmpty {
             log("=== Pinning Applications to Dock ===", color: .logCyan)
             currentStatus = "Pinning apps to Dock..."
             
-            for app in successfulApps {
-                if let appPath = findInstalledAppPath(app) {
+            for pkg in successfulPkgs {
+                if let appPath = findInstalledAppPath(pkg.name) {
                     do {
                         let added = try await systemStandardizer.addAppToDock(appPath: appPath)
                         if added {
-                            log("  • Pinned \(app.name) to Dock (\(appPath))", color: .logGray)
+                            log("  • Pinned \(pkg.name) to Dock (\(appPath))", color: .logGray)
                         } else {
-                            log("  • \(app.name) already in Dock", color: .logGray)
+                            log("  • \(pkg.name) already in Dock", color: .logGray)
                         }
                     } catch {
-                        log("  • Could not pin \(app.name) to Dock", color: .logGray)
+                        log("  • Could not pin \(pkg.name) to Dock", color: .logGray)
                     }
                 }
             }
@@ -289,7 +287,7 @@ class DeploymentManager: ObservableObject {
         // Restart Dock once — AFTER all modifications (standardization + pinning).
         // The Dock process "owns" its persistent-apps and syncs them back to cfprefsd,
         // so restarting mid-flow causes it to overwrite later additions.
-        if macStandardization || !successfulApps.isEmpty {
+        if macStandardization || !successfulPkgs.isEmpty {
             do {
                 try await systemStandardizer.restartDock()
                 log("✓ Dock updated", color: .logGreen)
@@ -441,32 +439,190 @@ class DeploymentManager: ObservableObject {
         }
     }
     
-    // MARK: - Application Installation
+    // MARK: - Data-Driven Detection
     
-    /// Check if an application is already installed
-    private func isApplicationInstalled(_ app: ApplicationDefinition) async -> Bool {
-        // First do a broad check: scan /Applications (including subdirectories) for a matching .app bundle
-        // This handles cases where the installed app name differs slightly from catalog name
-        if appExistsInApplications(app.name) {
-            return true
+    /// Check if a package is already installed using its detection_method and detection_value
+    private func checkIfInstalled(_ pkg: PackageInfo) async -> Bool {
+        switch pkg.detectionMethod {
+        case "app_bundle":
+            // Check if .app exists at the specified path
+            if let path = pkg.detectionValue, !path.isEmpty {
+                if FileManager.default.fileExists(atPath: path) { return true }
+            }
+            // Fallback: scan /Applications by name
+            if appExistsInApplications(pkg.name) { return true }
+            return await spotlightFindApp(pkg.name)
+            
+        case "brew":
+            // Check via Homebrew's package list
+            if let brewId = pkg.detectionValue ?? pkg.brewId {
+                let brewType: InstallMethod.HomebrewType = (pkg.brewType == "formula") ? .formula : .cask
+                if await homebrewInstaller.isInstalled(packageId: brewId, type: brewType) { return true }
+            }
+            // Also check /Applications by name
+            return appExistsInApplications(pkg.name)
+            
+        case "file_path":
+            if let path = pkg.detectionValue, !path.isEmpty {
+                return FileManager.default.fileExists(atPath: path)
+            }
+            return appExistsInApplications(pkg.name)
+            
+        case "file_paths":
+            // Pipe-delimited list of paths — any match means installed
+            if let paths = pkg.detectionValue {
+                for path in paths.components(separatedBy: "|") {
+                    let trimmed = path.trimmingCharacters(in: .whitespaces)
+                    if !trimmed.isEmpty && FileManager.default.fileExists(atPath: trimmed) {
+                        return true
+                    }
+                }
+            }
+            return appExistsInApplications(pkg.name)
+            
+        case "none":
+            return false  // Always install (test content, etc.)
+            
+        default:
+            // Unknown detection method — do a broad search
+            if appExistsInApplications(pkg.name) { return true }
+            return await spotlightFindApp(pkg.name)
+        }
+    }
+    
+    // MARK: - Data-Driven Installation
+    
+    /// Install a package based on its install_method field
+    private func installPackage(_ pkg: PackageInfo) async throws {
+        switch pkg.installMethod {
+        case "brew":
+            guard let brewId = pkg.brewId ?? pkg.detectionValue else {
+                throw DeploymentError.missingPackageId(pkg.name)
+            }
+            let brewType: InstallMethod.HomebrewType = (pkg.brewType == "formula") ? .formula : .cask
+            try await homebrewInstaller.install(packageId: brewId, type: brewType)
+            
+            // If brew install fails and there's a fallback URL, try direct download
+            // (The error path is handled by the catch in the caller, but we can add
+            //  fallback logic here in the future)
+            
+        case "dmg":
+            guard let url = pkg.effectiveDownloadUrl else {
+                throw DeploymentError.missingDownloadUrl(pkg.name)
+            }
+            try await directDownloadInstaller.install(name: pkg.name, url: url, format: .dmg)
+            
+        case "pkg":
+            guard let url = pkg.effectiveDownloadUrl else {
+                throw DeploymentError.missingDownloadUrl(pkg.name)
+            }
+            try await directDownloadInstaller.install(name: pkg.name, url: url, format: .pkg)
+            
+        case "zip":
+            guard let url = pkg.effectiveDownloadUrl else {
+                throw DeploymentError.missingDownloadUrl(pkg.name)
+            }
+            try await directDownloadInstaller.install(name: pkg.name, url: url, format: .zip)
+            
+        case "run":
+            guard let url = pkg.effectiveDownloadUrl else {
+                throw DeploymentError.missingDownloadUrl(pkg.name)
+            }
+            try await directDownloadInstaller.install(name: pkg.name, url: url, format: .run)
+            
+        case "direct_download":
+            guard let url = pkg.effectiveDownloadUrl else {
+                throw DeploymentError.missingDownloadUrl(pkg.name)
+            }
+            // Infer format from URL extension
+            let format = inferInstallerFormat(from: url)
+            try await directDownloadInstaller.install(name: pkg.name, url: url, format: format)
+            
+        case "extract_to_desktop":
+            guard let url = pkg.effectiveDownloadUrl else {
+                throw DeploymentError.missingDownloadUrl(pkg.name)
+            }
+            try await downloadAndExtractToDesktop(name: pkg.name, url: url)
+            
+        default:
+            throw DeploymentError.notImplemented("Install method '\(pkg.installMethod)' for \(pkg.name)")
+        }
+    }
+    
+    /// Infer the installer format from a URL's file extension
+    private func inferInstallerFormat(from url: String) -> InstallMethod.InstallerFormat {
+        let lower = url.lowercased()
+        if lower.contains(".dmg") { return .dmg }
+        if lower.contains(".pkg") { return .pkg }
+        if lower.contains(".zip") { return .zip }
+        if lower.contains(".run") { return .run }
+        if lower.contains(".app") { return .app }
+        return .dmg // Default to DMG
+    }
+    
+    /// Download a ZIP and extract to ~/Desktop (for test content, etc.)
+    private func downloadAndExtractToDesktop(name: String, url: String) async throws {
+        guard let downloadUrl = URL(string: url) else {
+            throw DeploymentError.missingDownloadUrl(name)
         }
         
-        // Second: check via Spotlight (mdfind) — catches apps installed anywhere on the system
-        if await spotlightFindApp(app.name) {
-            return true
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("MacDeploymentToolkit")
+        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let localFile = tempDir.appendingPathComponent("\(name).zip")
+        
+        // Download
+        let (tempUrl, response) = try await downloadWithContinuation(from: downloadUrl)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            throw DeploymentError.installationFailed("Download failed for \(name)")
         }
         
-        // Third: for Homebrew apps, also check Homebrew's package list
-        switch app.installMethod {
-        case .homebrew(let type):
-            guard let packageId = app.packageId else { return false }
-            return await homebrewInstaller.isInstalled(packageId: packageId, type: type)
-            
-        case .macAppStore:
-            return false  // Already checked above
-            
-        case .directDownload, .custom:
-            return false  // Already checked above
+        try? FileManager.default.removeItem(at: localFile)
+        try FileManager.default.moveItem(at: tempUrl, to: localFile)
+        defer { try? FileManager.default.removeItem(at: localFile) }
+        
+        // Extract to Desktop
+        let desktopPath = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop")
+        let destPath = desktopPath.appendingPathComponent(name)
+        try? FileManager.default.removeItem(at: destPath)
+        
+        let process = Process()
+        let outputPipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-c", "unzip -q '\(localFile.path)' -d '\(destPath.path)'"]
+        process.standardOutput = outputPipe
+        process.standardError = outputPipe
+        try process.run()
+        process.waitUntilExit()
+        
+        if process.terminationStatus != 0 {
+            throw DeploymentError.installationFailed("Failed to extract \(name) to Desktop")
+        }
+    }
+    
+    /// macOS 11 compatible download helper
+    private func downloadWithContinuation(from url: URL) async throws -> (URL, URLResponse) {
+        return try await withCheckedThrowingContinuation { continuation in
+            let task = URLSession.shared.downloadTask(with: url) { localUrl, response, error in
+                if let error = error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                guard let localUrl = localUrl, let response = response else {
+                    continuation.resume(throwing: DeploymentError.installationFailed("Download returned no data"))
+                    return
+                }
+                let tempDest = FileManager.default.temporaryDirectory
+                    .appendingPathComponent(UUID().uuidString)
+                    .appendingPathExtension(url.pathExtension)
+                do {
+                    try FileManager.default.moveItem(at: localUrl, to: tempDest)
+                    continuation.resume(returning: (tempDest, response))
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+            task.resume()
         }
     }
     
@@ -548,9 +704,9 @@ class DeploymentManager: ObservableObject {
     
     /// Find the full path to an installed app in /Applications (including subdirectories)
     /// Returns the first matching .app path, or nil if not found
-    private func findInstalledAppPath(_ app: ApplicationDefinition) -> String? {
+    private func findInstalledAppPath(_ appName: String) -> String? {
         let fm = FileManager.default
-        let searchLower = app.name.lowercased()
+        let searchLower = appName.lowercased()
         
         let directories = [
             "/Applications",
@@ -588,53 +744,6 @@ class DeploymentManager: ObservableObject {
         }
         
         return nil
-    }
-    
-    /// Install an application based on its installation method
-    private func installApplication(_ app: ApplicationDefinition) async throws {
-        switch app.installMethod {
-        case .homebrew(let type):
-            guard let packageId = app.packageId else {
-                throw DeploymentError.missingPackageId(app.name)
-            }
-            try await homebrewInstaller.install(packageId: packageId, type: type)
-            
-        case .macAppStore:
-            // TODO: Implement mas-cli installation
-            throw DeploymentError.notImplemented("Mac App Store installation")
-            
-        case .directDownload(let format):
-            guard let downloadUrl = app.effectiveDownloadUrl else {
-                // Try Supabase for apps without direct URLs
-                throw DeploymentError.missingDownloadUrl(app.name)
-            }
-            try await directDownloadInstaller.install(
-                name: app.name,
-                url: downloadUrl,
-                format: format
-            )
-            
-        case .custom(let handler):
-            try await handleCustomInstallation(app, handler: handler)
-        }
-    }
-    
-    /// Handle custom installation types (test content, etc.)
-    private func handleCustomInstallation(_ app: ApplicationDefinition, handler: String) async throws {
-        switch handler {
-        case "audiotestcontent":
-            log("  • Downloading Audio Test Content...", color: .logGray)
-            // TODO: Download from Supabase and extract to Desktop
-            throw DeploymentError.notImplemented("Audio Test Content")
-            
-        case "videotestcontent":
-            log("  • Downloading Video Test Content...", color: .logGray)
-            // TODO: Download from Supabase and extract to Desktop, install VLC
-            throw DeploymentError.notImplemented("Video Test Content")
-            
-        default:
-            throw DeploymentError.unknownHandler(handler)
-        }
     }
     
     // MARK: - Task Management

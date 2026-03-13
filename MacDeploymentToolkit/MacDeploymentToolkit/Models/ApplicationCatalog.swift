@@ -286,4 +286,78 @@ struct ApplicationCatalog {
     static func applications(for category: ApplicationCategory) -> [ApplicationDefinition] {
         applications[category] ?? []
     }
+    
+    // MARK: - PackageInfo Hardcoded Fallback (Tier 3)
+    
+    /// Returns all catalog entries as PackageInfo objects for the given platform.
+    /// This is the tier-3 fallback when Supabase and local cache are both unavailable.
+    static func hardcodedPackages(for platform: String) -> [PackageInfo] {
+        var result: [PackageInfo] = []
+        var sortOrder = 100
+        
+        for category in ApplicationCategory.allCases {
+            let apps = applications[category] ?? []
+            for app in apps {
+                let (method, _, brewType) = installMethodFields(app.installMethod)
+                let (detMethod, detValue) = detectionFields(for: app)
+                
+                let pkg = PackageInfo(
+                    id: app.id.uuidString,
+                    name: app.name,
+                    version: app.version,
+                    category: category.rawValue,
+                    platforms: [platform],
+                    installMethod: method,
+                    wingetId: nil,
+                    brewId: app.packageId,
+                    brewType: brewType,
+                    downloadUrl: app.effectiveDownloadUrl,
+                    installArgs: nil,
+                    detectionMethod: detMethod,
+                    detectionValue: detValue,
+                    postInstallCloseWindows: nil,
+                    postInstallCloseDelayMs: nil,
+                    pinToTaskbar: nil,
+                    alsoInstallWingetId: nil,
+                    launchDriverWatcher: nil,
+                    fallbackDownloadUrl: nil,
+                    fallbackInstallArgs: nil,
+                    enabled: true,
+                    sortOrder: sortOrder
+                )
+                result.append(pkg)
+                sortOrder += 1
+            }
+        }
+        
+        return result
+    }
+    
+    /// Map an InstallMethod enum to the string fields used by PackageInfo
+    private static func installMethodFields(_ method: InstallMethod) -> (method: String, brewId: String?, brewType: String?) {
+        switch method {
+        case .homebrew(let type):
+            return ("brew", nil, type.rawValue) // brewId comes from packageId on the app
+        case .macAppStore:
+            return ("mas", nil, nil)
+        case .directDownload(let format):
+            return (format.rawValue, nil, nil) // "dmg", "pkg", "zip", "app", "run"
+        case .custom:
+            return ("extract_to_desktop", nil, nil)
+        }
+    }
+    
+    /// Derive detection fields from an ApplicationDefinition
+    private static func detectionFields(for app: ApplicationDefinition) -> (method: String, value: String?) {
+        switch app.installMethod {
+        case .homebrew:
+            return ("brew", app.packageId)
+        case .macAppStore:
+            return ("app_bundle", "/Applications/\(app.name).app")
+        case .directDownload:
+            return ("app_bundle", "/Applications/\(app.name).app")
+        case .custom:
+            return ("none", nil)
+        }
+    }
 }

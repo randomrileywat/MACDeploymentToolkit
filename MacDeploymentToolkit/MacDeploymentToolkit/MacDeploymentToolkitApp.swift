@@ -14,12 +14,14 @@ import SwiftUI
 struct MacDeploymentToolkitApp: App {
     @StateObject private var deploymentManager = DeploymentManager()
     @StateObject private var networkMonitor = NetworkMonitor()
+    @StateObject private var packageIndex = PackageIndexService()
     
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environmentObject(deploymentManager)
                 .environmentObject(networkMonitor)
+                .environmentObject(packageIndex)
         }
         .windowResizabilityContentSize()
     }

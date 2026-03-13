@@ -11,8 +11,9 @@ import AppKit
 struct ContentView: View {
     @EnvironmentObject var deploymentManager: DeploymentManager
     @EnvironmentObject var networkMonitor: NetworkMonitor
+    @EnvironmentObject var packageIndex: PackageIndexService
     
-    @State private var selectedApps: Set<UUID> = []
+    @State private var selectedPackageIds: Set<String> = []
     @State private var expandedCategories: Set<ApplicationCategory> = Set(ApplicationCategory.allCases)
     @State private var macStandardizationEnabled = false
     @State private var computerName: String = ContentView.cleanComputerName()
@@ -39,6 +40,11 @@ struct ContentView: View {
                minHeight: 680, idealHeight: 680, maxHeight: 680)
         .fixedSize()
         .background(Color(NSColor.windowBackgroundColor))
+        .onAppear {
+            Task {
+                await packageIndex.loadPackages()
+            }
+        }
     }
     
     // MARK: - Computer Name Helper
@@ -132,8 +138,37 @@ struct ContentView: View {
     private var applicationTreeView: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                ForEach(ApplicationCategory.allCases) { category in
-                    categorySection(for: category)
+                // Data source indicator
+                if !packageIndex.dataSource.rawValue.isEmpty {
+                    HStack {
+                        Text("Source: \(packageIndex.dataSource.rawValue)")
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Text("\(packageIndex.packages.count) packages")
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.horizontal, 4)
+                    .padding(.bottom, 4)
+                }
+                
+                if packageIndex.isLoading {
+                    HStack {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                        Text("Loading packages...")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                    }
+                    .padding()
+                } else {
+                    ForEach(ApplicationCategory.allCases) { category in
+                        let pkgs = packageIndex.packagesByCategory[category.rawValue] ?? []
+                        if !pkgs.isEmpty {
+                            categorySection(for: category, packages: pkgs)
+                        }
+                    }
                 }
             }
             .padding(.horizontal, 16)
@@ -145,7 +180,7 @@ struct ContentView: View {
         .padding(.top, 8)
     }
     
-    private func categorySection(for category: ApplicationCategory) -> some View {
+    private func categorySection(for category: ApplicationCategory, packages: [PackageInfo]) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             // Category Header
             Button(action: {
@@ -173,7 +208,7 @@ struct ContentView: View {
                     Spacer()
                     
                     // Selection count for category
-                    let count = selectedCountForCategory(category)
+                    let count = packages.filter { selectedPackageIds.contains($0.id) }.count
                     if count > 0 {
                         Text("\(count)")
                             .font(.system(size: 11, weight: .medium))
@@ -191,35 +226,34 @@ struct ContentView: View {
             
             // Category Items
             if expandedCategories.contains(category) {
-                let apps = ApplicationCatalog.applications(for: category)
-                ForEach(apps) { app in
-                    applicationRow(for: app)
+                ForEach(packages) { pkg in
+                    packageRow(for: pkg)
                 }
             }
         }
     }
     
-    private func applicationRow(for app: ApplicationDefinition) -> some View {
+    private func packageRow(for pkg: PackageInfo) -> some View {
         HStack(spacing: 8) {
             Toggle("", isOn: Binding(
-                get: { selectedApps.contains(app.id) },
+                get: { selectedPackageIds.contains(pkg.id) },
                 set: { isSelected in
                     if isSelected {
-                        selectedApps.insert(app.id)
+                        selectedPackageIds.insert(pkg.id)
                     } else {
-                        selectedApps.remove(app.id)
+                        selectedPackageIds.remove(pkg.id)
                     }
                 }
             ))
             .toggleStyle(.checkbox)
             .labelsHidden()
             
-            Text(app.name)
+            Text(pkg.displayName)
                 .font(.system(size: 12))
                 .foregroundColor(.primary)
             
-            if let equivalent = app.macOsEquivalent {
-                Text("(\(equivalent))")
+            if let version = pkg.version, !version.isEmpty {
+                Text("v\(version)")
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
             }
@@ -227,23 +261,29 @@ struct ContentView: View {
             Spacer()
             
             // Install method indicator
-            installMethodBadge(for: app.installMethod)
+            installMethodBadge(for: pkg.installMethod)
         }
         .padding(.leading, 28)
         .padding(.vertical, 4)
     }
     
-    private func installMethodBadge(for method: InstallMethod) -> some View {
+    private func installMethodBadge(for method: String) -> some View {
         let (text, color): (String, Color) = {
             switch method {
-            case .homebrew:
+            case "brew":
                 return ("brew", Color.orange)
-            case .macAppStore:
-                return ("MAS", Color.blue)
-            case .directDownload:
+            case "dmg":
+                return ("dmg", Color.purple)
+            case "pkg":
+                return ("pkg", Color.purple)
+            case "zip", "run":
+                return (method, Color.purple)
+            case "extract_to_desktop":
+                return ("extract", Color.gray)
+            case "direct_download":
                 return ("download", Color.purple)
-            case .custom:
-                return ("custom", Color.gray)
+            default:
+                return (method, Color.gray)
             }
         }()
         
@@ -254,11 +294,6 @@ struct ContentView: View {
             .padding(.vertical, 2)
             .background(color.opacity(0.15))
             .cornerRadius(4)
-    }
-    
-    private func selectedCountForCategory(_ category: ApplicationCategory) -> Int {
-        let apps = ApplicationCatalog.applications(for: category)
-        return apps.filter { selectedApps.contains($0.id) }.count
     }
     
     // MARK: - Mac Standardization Section
@@ -349,7 +384,7 @@ struct ContentView: View {
     private var statusInfo: (String, Color) {
         if !networkMonitor.isConnected {
             return ("Network connection required", .red)
-        } else if selectedApps.isEmpty && !macStandardizationEnabled {
+        } else if selectedPackageIds.isEmpty && !macStandardizationEnabled {
             return ("Select applications to deploy", .secondary)
         } else {
             return ("Ready to deploy", .secondary)
@@ -357,7 +392,7 @@ struct ContentView: View {
     }
     
     private var canDeploy: Bool {
-        networkMonitor.isConnected && (!selectedApps.isEmpty || macStandardizationEnabled)
+        networkMonitor.isConnected && (!selectedPackageIds.isEmpty || macStandardizationEnabled)
     }
     
     private var deployButton: some View {
@@ -374,10 +409,10 @@ struct ContentView: View {
     }
     
     private func startDeployment() {
-        let appsToInstall = ApplicationCatalog.allApplications.filter { selectedApps.contains($0.id) }
+        let pkgsToInstall = packageIndex.packages.filter { selectedPackageIds.contains($0.id) }
         
         deploymentManager.startDeployment(
-            applications: appsToInstall,
+            packages: pkgsToInstall,
             macStandardization: macStandardizationEnabled,
             computerName: computerName,
             customIconPath: customIconPath.isEmpty ? nil : customIconPath
@@ -522,5 +557,6 @@ struct ContentView_Previews: PreviewProvider {
         ContentView()
             .environmentObject(DeploymentManager())
             .environmentObject(NetworkMonitor())
+            .environmentObject(PackageIndexService())
     }
 }
