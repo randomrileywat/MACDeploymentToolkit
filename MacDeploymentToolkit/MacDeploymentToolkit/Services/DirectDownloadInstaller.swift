@@ -6,6 +6,9 @@
 //
 
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Handles application installation via direct downloads
 class DirectDownloadInstaller {
@@ -118,41 +121,41 @@ class DirectDownloadInstaller {
             }
         }
         
-        // Look for .pkg or .app in the mounted volume
-        let contents = try fileManager.contentsOfDirectory(at: mountPoint, includingPropertiesForKeys: nil)
-        
-        // Check for .pkg installer FIRST (common for Blackmagic, driver packages, etc.)
-        // Many DMGs contain an installer .app alongside a .pkg — the .pkg is the proper
-        // installation method, while the .app is just a GUI wrapper or uninstaller.
-        if let pkgInstaller = contents.first(where: { $0.pathExtension == "pkg" }) {
-            try await installFromPKG(pkgInstaller)
-            return
+        // Prefer a top-level .pkg, then a top-level .app, then the same pair one folder down.
+        // Interactive Studio ships the .app inside a subfolder rather than at the volume root.
+        let items = try dmgItems(in: mountPoint, includeChildren: true)
+        guard let choice = DMGInstallerLocator.locate(items) else {
+            throw DirectDownloadError.appNotFoundInDMG(appName)
         }
-        
-        // Fall back to .app bundle (simple drag-and-drop style DMGs)
-        if let appBundle = contents.first(where: { $0.pathExtension == "app" }) {
-            let destination = URL(fileURLWithPath: "/Applications").appendingPathComponent(appBundle.lastPathComponent)
-            if fileManager.fileExists(atPath: destination.path) {
-                try fileManager.removeItem(at: destination)
-            }
-            try fileManager.copyItem(at: appBundle, to: destination)
-            return
+        let payload = choice.pathComponents.reduce(mountPoint) { partial, component in
+            partial.appendingPathComponent(component)
         }
-        
-        // Check subdirectories for .pkg files (some DMGs nest them)
-        for item in contents {
+        switch choice.kind {
+        case .pkg:
+            try await installFromPKG(payload)
+        case .app:
+            try installCopiedApp(payload)
+        }
+    }
+
+    /// One level of children is enough: vendor DMGs nest the payload in a single folder.
+    private func dmgItems(in directory: URL, includeChildren: Bool) throws -> [DMGItem] {
+        let urls = try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        var items: [DMGItem] = []
+        items.reserveCapacity(urls.count)
+        for url in urls {
             var isDir: ObjCBool = false
-            if fileManager.fileExists(atPath: item.path, isDirectory: &isDir), isDir.boolValue {
-                if let subContents = try? fileManager.contentsOfDirectory(at: item, includingPropertiesForKeys: nil) {
-                    if let pkgInstaller = subContents.first(where: { $0.pathExtension == "pkg" }) {
-                        try await installFromPKG(pkgInstaller)
-                        return
-                    }
-                }
-            }
+            _ = fileManager.fileExists(atPath: url.path, isDirectory: &isDir)
+            let name = url.lastPathComponent
+            let shouldDescend = includeChildren
+                && isDir.boolValue
+                && !name.hasPrefix(".")
+                && name != "__MACOSX"
+                && url.pathExtension.lowercased() != "app"
+            let children = shouldDescend ? try dmgItems(in: url, includeChildren: false) : []
+            items.append(DMGItem(name: name, isDirectory: isDir.boolValue, children: children))
         }
-        
-        throw DirectDownloadError.appNotFoundInDMG(appName)
+        return items
     }
     
     private func mountDMG(_ dmgPath: URL) async throws -> URL {
@@ -229,15 +232,17 @@ class DirectDownloadInstaller {
         
         // Find and install .app bundle from extracted contents
         let extractedContents = try fileManager.contentsOfDirectory(at: extractDir, includingPropertiesForKeys: nil)
-        guard let appBundle = extractedContents.first(where: { $0.pathExtension == "app" }) else {
+        guard let appBundle = extractedContents.first(where: { $0.pathExtension.lowercased() == "app" }) else {
             throw DirectDownloadError.extractFailed(zipPath.lastPathComponent, "No .app bundle found in ZIP")
         }
+        try installCopiedApp(appBundle)
+    }
+
+    private func installCopiedApp(_ appBundle: URL) throws {
         let destination = URL(fileURLWithPath: "/Applications").appendingPathComponent(appBundle.lastPathComponent)
-        
         if fileManager.fileExists(atPath: destination.path) {
             try fileManager.removeItem(at: destination)
         }
-        
         try fileManager.copyItem(at: appBundle, to: destination)
     }
     
@@ -372,6 +377,62 @@ class DirectDownloadInstaller {
                 }
             }
         }
+    }
+}
+
+// MARK: - DMG payload lookup
+
+struct DMGItem {
+    var name: String
+    var isDirectory: Bool
+    var children: [DMGItem]
+}
+
+/// Picks the installer inside a mounted disk image.
+/// A `.pkg` wins over a `.app` at the same level. The payload may sit one folder down
+/// (CueServer Studio / Interactive Studio keeps the `.app` in a subfolder).
+enum DMGInstallerLocator {
+    enum Kind: Equatable {
+        case pkg
+        case app
+    }
+
+    struct Choice {
+        var kind: Kind
+        var pathComponents: [String]
+    }
+
+    static func locate(_ items: [DMGItem]) -> Choice? {
+        let visible = visibleItems(items)
+        if let pkg = visible.first(where: { isPackage($0.name) }) {
+            return Choice(kind: .pkg, pathComponents: [pkg.name])
+        }
+        if let app = visible.first(where: { isApp($0.name) }) {
+            return Choice(kind: .app, pathComponents: [app.name])
+        }
+        for directory in visible where directory.isDirectory && !isApp(directory.name) {
+            let children = visibleItems(directory.children)
+            if let pkg = children.first(where: { isPackage($0.name) }) {
+                return Choice(kind: .pkg, pathComponents: [directory.name, pkg.name])
+            }
+            if let app = children.first(where: { isApp($0.name) }) {
+                return Choice(kind: .app, pathComponents: [directory.name, app.name])
+            }
+        }
+        return nil
+    }
+
+    private static func visibleItems(_ items: [DMGItem]) -> [DMGItem] {
+        items.filter { !$0.name.hasPrefix(".") && $0.name != "__MACOSX" }
+    }
+
+    private static func isPackage(_ name: String) -> Bool {
+        let ext = (name as NSString).pathExtension.lowercased()
+        return ext == "pkg" || ext == "mpkg"
+    }
+
+    private static func isApp(_ name: String) -> Bool {
+        (name as NSString).pathExtension.lowercased() == "app"
     }
 }
 
