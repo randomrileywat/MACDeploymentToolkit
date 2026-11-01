@@ -108,18 +108,8 @@ expect(DMGInstallerLocator.locate([
     ])
 ]) == nil, "macOS metadata is ignored")
 
-let keyParts = PackageCatalogClient.anonKey.split(separator: ".")
-expect(keyParts.count == 3, "catalog key shape")
-var payload = keyParts[1]
-    .replacingOccurrences(of: "-", with: "+")
-    .replacingOccurrences(of: "_", with: "/")
-while payload.count % 4 != 0 { payload += "=" }
-guard let payloadData = Data(base64Encoded: payload),
-      let json = try JSONSerialization.jsonObject(with: payloadData) as? [String: Any],
-      let role = json["role"] as? String else {
-    fail("catalog key payload")
-}
-expect(role == "anon", "catalog key role is \(role)")
+expect(PackageCatalogClient.anonKey.hasPrefix("sb_publishable_"), "catalog key is the publishable key")
+expect(!PackageCatalogClient.anonKey.hasPrefix("eyJ"), "legacy JWT is not the catalog key")
 
 do {
     let remoteArm = try await PackageCatalogClient.fetchEnabledMacPackages(isAppleSilicon: true)

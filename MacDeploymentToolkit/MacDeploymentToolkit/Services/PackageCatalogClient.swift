@@ -3,7 +3,7 @@
 //  MacDeploymentToolkit
 //
 //  Loads the software catalog from the public Supabase `packages` table.
-//  Uses the anon key only. Row Level Security allows this read.
+//  Uses the publishable (anon-role) key only. Row Level Security allows this read.
 //  Do not embed a privileged Supabase key in this app.
 //
 
@@ -39,9 +39,9 @@ enum PackageCatalogClient {
     static let supabaseURL = URL(string: "https://incdoepqrbwaagatikgb.supabase.co")!
     static let packagesURL = URL(string: "https://incdoepqrbwaagatikgb.supabase.co/rest/v1/packages")!
 
-    /// Legacy anon JWT. This is the publishable client key for this project
-    /// (no `sb_publishable_` key is configured). It is safe to ship in the app.
-    static let anonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImluY2RvZXBxcmJ3YWFnYXRpa2diIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjI5MDcwNDksImV4cCI6MjA3ODQ4MzA0OX0.bqGIGIT-HxpcM-AH3Xd4lyLBN3cwAmNFuxp6V1JmvLw"
+    /// Default publishable API key (anon role). Legacy JWT anon keys are disabled
+    /// on this project. Still safe to ship in the app.
+    static let anonKey = "sb_publishable_imH2OpDmhTe5QKtlWjlaUg_p9nZlb27"
 
     /// Live `platforms` values are `mac_apple_silicon` and `mac_intel`.
     /// `mac` and `mac_arm` are accepted so a later rename still matches.
