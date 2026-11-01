@@ -7,7 +7,8 @@
 
 import Foundation
 
-/// Provides the catalog of all installable applications
+/// Built-in catalog used only when the Supabase `packages` fetch fails.
+/// The live list is loaded by `CatalogStore` at launch.
 struct ApplicationCatalog {
     
     /// All available applications organized by category

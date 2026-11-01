@@ -66,10 +66,6 @@ class DeploymentManager: ObservableObject {
     private var sudoKeepaliveProcess: Process?
     private var adminPassword: String?
     
-    // Supabase configuration
-    private let supabaseUrl = "https://incdoepqrbwaagatikgb.supabase.co"
-    private let supabaseServiceKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImluY2RvZXBxcmJ3YWFnYXRpa2diIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2MjkwNzA0OSwiZXhwIjoyMDc4NDgzMDQ5fQ.5qjYJq7OGWAdBIVZqzpRE71aJEEOvbko9m3VDVJuQQA"
-    
     // MARK: - Deployment Control
     
     /// Start the deployment process with selected applications and options
@@ -77,7 +73,9 @@ class DeploymentManager: ObservableObject {
         applications: [ApplicationDefinition],
         macStandardization: Bool,
         computerName: String,
-        customIconPath: String?
+        customIconPath: String?,
+        catalogAppNames: [String],
+        catalogSourceDescription: String
     ) {
         guard !isDeploying else { return }
         
@@ -107,7 +105,9 @@ class DeploymentManager: ObservableObject {
                 applications: applications,
                 macStandardization: macStandardization,
                 computerName: computerName,
-                customIconPath: customIconPath
+                customIconPath: customIconPath,
+                catalogAppNames: catalogAppNames,
+                catalogSourceDescription: catalogSourceDescription
             )
         }
     }
@@ -117,12 +117,15 @@ class DeploymentManager: ObservableObject {
         applications: [ApplicationDefinition],
         macStandardization: Bool,
         computerName: String,
-        customIconPath: String?
+        customIconPath: String?,
+        catalogAppNames: [String],
+        catalogSourceDescription: String
     ) async {
         let startTime = Date()
         
         log("=== Mac Deployment Started ===", color: .logCyan)
         log("Timestamp: \(formatDate(startTime))", color: .logGray)
+        log(catalogSourceDescription, color: .logGray)
         log("")
         
         var successCount = 0
@@ -165,8 +168,7 @@ class DeploymentManager: ObservableObject {
             
             do {
                 // Pass all catalog app names so dock cleanup preserves them
-                let allCatalogNames = ApplicationCatalog.applications.values.flatMap { $0 }.map { $0.name }
-                systemStandardizer.catalogAppNames = Set(allCatalogNames)
+                systemStandardizer.catalogAppNames = Set(catalogAppNames)
                 
                 try await systemStandardizer.applyStandardization(
                     computerName: computerName,
@@ -204,7 +206,7 @@ class DeploymentManager: ObservableObject {
                     hasHomebrew = true
                 } catch {
                     log("✗ Failed to install Homebrew: \(error.localizedDescription)", color: .logRed)
-                    log("Homebrew apps will be skipped. Install Homebrew manually and retry.", color: .logOrange)
+                    log("Homebrew installs will try a vendor fallback when one is configured.", color: .logOrange)
                 }
             } else {
                 log("✓ Homebrew is available", color: .logGreen)
@@ -443,31 +445,64 @@ class DeploymentManager: ObservableObject {
     
     // MARK: - Application Installation
     
-    /// Check if an application is already installed
+    /// Check if an application is already installed.
+    /// Catalog rows with `detection_method` use that signal. The built-in fallback
+    /// catalog has no detection fields and keeps the older name / Spotlight scan.
     private func isApplicationInstalled(_ app: ApplicationDefinition) async -> Bool {
-        // First do a broad check: scan /Applications (including subdirectories) for a matching .app bundle
-        // This handles cases where the installed app name differs slightly from catalog name
-        if appExistsInApplications(app.name) {
-            return true
+        switch app.detectionMethod {
+        case .skip:
+            return false
+        case .appBundle, .filePath:
+            return existingDetectionPath(for: app) != nil
+        case .brew:
+            if await homebrewPackageIsInstalled(app) { return true }
+            if appExistsInApplications(app.name) { return true }
+            return await spotlightFindApp(app.name)
+        case nil:
+            if appExistsInApplications(app.name) { return true }
+            if await spotlightFindApp(app.name) { return true }
+            switch app.installMethod {
+            case .homebrew(let type):
+                guard let packageId = app.packageId else { return false }
+                return await homebrewInstaller.isInstalled(packageId: packageId, type: type)
+            case .macAppStore, .directDownload, .custom:
+                return false
+            }
         }
-        
-        // Second: check via Spotlight (mdfind) — catches apps installed anywhere on the system
-        if await spotlightFindApp(app.name) {
-            return true
+    }
+
+    private func homebrewPackageIsInstalled(_ app: ApplicationDefinition) async -> Bool {
+        let packageId = app.detectionValue ?? app.packageId
+        guard let packageId, !packageId.isEmpty else { return false }
+        let type: InstallMethod.HomebrewType
+        if case .homebrew(let brewType) = app.installMethod {
+            type = brewType
+        } else {
+            type = .cask
         }
-        
-        // Third: for Homebrew apps, also check Homebrew's package list
-        switch app.installMethod {
-        case .homebrew(let type):
-            guard let packageId = app.packageId else { return false }
-            return await homebrewInstaller.isInstalled(packageId: packageId, type: type)
-            
-        case .macAppStore:
-            return false  // Already checked above
-            
-        case .directDownload, .custom:
-            return false  // Already checked above
+        return await homebrewInstaller.isInstalled(packageId: packageId, type: type)
+    }
+
+    /// Resolves `detection_value` and the same file name under ~/Applications.
+    private func existingDetectionPath(for app: ApplicationDefinition) -> String? {
+        guard let raw = app.detectionValue?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            return nil
         }
+        let path = (raw as NSString).expandingTildeInPath
+        let fm = FileManager.default
+        if fm.fileExists(atPath: path) {
+            return path
+        }
+        if path.hasPrefix("/Applications/") {
+            let userPath = fm.homeDirectoryForCurrentUser
+                .appendingPathComponent("Applications")
+                .appendingPathComponent((path as NSString).lastPathComponent)
+                .path
+            if fm.fileExists(atPath: userPath) {
+                return userPath
+            }
+        }
+        return nil
     }
     
     /// Scan /Applications (and ~/Applications) for an app whose name contains the search term
@@ -549,6 +584,10 @@ class DeploymentManager: ObservableObject {
     /// Find the full path to an installed app in /Applications (including subdirectories)
     /// Returns the first matching .app path, or nil if not found
     private func findInstalledAppPath(_ app: ApplicationDefinition) -> String? {
+        if let detected = existingDetectionPath(for: app), detected.hasSuffix(".app") {
+            return detected
+        }
+
         let fm = FileManager.default
         let searchLower = app.name.lowercased()
         
@@ -597,7 +636,11 @@ class DeploymentManager: ObservableObject {
             guard let packageId = app.packageId else {
                 throw DeploymentError.missingPackageId(app.name)
             }
-            try await homebrewInstaller.install(packageId: packageId, type: type)
+            do {
+                try await homebrewInstaller.install(packageId: packageId, type: type)
+            } catch {
+                try await installHomebrewFallback(for: app, brewError: error)
+            }
             
         case .macAppStore:
             // TODO: Implement mas-cli installation
@@ -605,7 +648,6 @@ class DeploymentManager: ObservableObject {
             
         case .directDownload(let format):
             guard let downloadUrl = app.effectiveDownloadUrl else {
-                // Try Supabase for apps without direct URLs
                 throw DeploymentError.missingDownloadUrl(app.name)
             }
             try await directDownloadInstaller.install(
@@ -619,6 +661,27 @@ class DeploymentManager: ObservableObject {
         }
     }
     
+    /// When Homebrew cannot install the cask, download the vendor file and install it
+    /// from the URL extension (dmg, pkg, zip, and app/run when that is the file).
+    private func installHomebrewFallback(for app: ApplicationDefinition, brewError: Error) async throws {
+        guard let fallbackURL = app.effectiveFallbackDownloadUrl else {
+            throw brewError
+        }
+        guard let format = InstallMethod.InstallerFormat(downloadURL: fallbackURL) else {
+            throw DeploymentError.installationFailed(
+                "Homebrew failed (\(brewError.localizedDescription)). Fallback URL has no supported extension (dmg, pkg, zip)"
+            )
+        }
+        log("  • Homebrew failed for \(app.name). Downloading vendor fallback (.\(format.rawValue))...", color: .logOrange)
+        do {
+            try await directDownloadInstaller.install(name: app.name, url: fallbackURL, format: format)
+        } catch {
+            throw DeploymentError.installationFailed(
+                "Homebrew failed (\(brewError.localizedDescription)). Vendor fallback failed (\(error.localizedDescription))"
+            )
+        }
+    }
+
     /// Handle custom installation types (test content, etc.)
     private func handleCustomInstallation(_ app: ApplicationDefinition, handler: String) async throws {
         switch handler {

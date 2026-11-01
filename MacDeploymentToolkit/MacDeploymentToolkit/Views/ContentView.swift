@@ -11,6 +11,7 @@ import AppKit
 struct ContentView: View {
     @EnvironmentObject var deploymentManager: DeploymentManager
     @EnvironmentObject var networkMonitor: NetworkMonitor
+    @EnvironmentObject var catalogStore: CatalogStore
     
     @State private var selectedApps: Set<UUID> = []
     @State private var expandedCategories: Set<ApplicationCategory> = Set(ApplicationCategory.allCases)
@@ -39,6 +40,9 @@ struct ContentView: View {
                minHeight: 680, idealHeight: 680, maxHeight: 680)
         .fixedSize()
         .background(Color(NSColor.windowBackgroundColor))
+        .onAppear {
+            Task { await catalogStore.load() }
+        }
     }
     
     // MARK: - Computer Name Helper
@@ -86,6 +90,9 @@ struct ContentView: View {
                     Text("Select applications to install:")
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
+                    Text(catalogStore.statusText)
+                        .font(.system(size: 10))
+                        .foregroundColor(catalogStatusColor)
                 }
             }
             
@@ -132,8 +139,24 @@ struct ContentView: View {
     private var applicationTreeView: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                ForEach(ApplicationCategory.allCases) { category in
-                    categorySection(for: category)
+                if !catalogStore.isReady {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Loading catalog from Supabase…")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.vertical, 12)
+                } else if visibleCategories.isEmpty {
+                    Text("No applications in the catalog.")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                        .padding(.vertical, 12)
+                } else {
+                    ForEach(visibleCategories) { category in
+                        categorySection(for: category)
+                    }
                 }
             }
             .padding(.horizontal, 16)
@@ -191,7 +214,7 @@ struct ContentView: View {
             
             // Category Items
             if expandedCategories.contains(category) {
-                let apps = ApplicationCatalog.applications(for: category)
+                let apps = catalogStore.applications(for: category)
                 ForEach(apps) { app in
                     applicationRow(for: app)
                 }
@@ -256,8 +279,17 @@ struct ContentView: View {
             .cornerRadius(4)
     }
     
+    private var visibleCategories: [ApplicationCategory] {
+        ApplicationCategory.allCases.filter { !catalogStore.applications(for: $0).isEmpty }
+    }
+
+    private var catalogStatusColor: Color {
+        if case .bundled = catalogStore.source { return .orange }
+        return .secondary
+    }
+
     private func selectedCountForCategory(_ category: ApplicationCategory) -> Int {
-        let apps = ApplicationCatalog.applications(for: category)
+        let apps = catalogStore.applications(for: category)
         return apps.filter { selectedApps.contains($0.id) }.count
     }
     
@@ -357,7 +389,7 @@ struct ContentView: View {
     }
     
     private var canDeploy: Bool {
-        networkMonitor.isConnected && (!selectedApps.isEmpty || macStandardizationEnabled)
+        catalogStore.isReady && networkMonitor.isConnected && (!selectedApps.isEmpty || macStandardizationEnabled)
     }
     
     private var deployButton: some View {
@@ -374,13 +406,15 @@ struct ContentView: View {
     }
     
     private func startDeployment() {
-        let appsToInstall = ApplicationCatalog.allApplications.filter { selectedApps.contains($0.id) }
+        let appsToInstall = catalogStore.allApplications.filter { selectedApps.contains($0.id) }
         
         deploymentManager.startDeployment(
             applications: appsToInstall,
             macStandardization: macStandardizationEnabled,
             computerName: computerName,
-            customIconPath: customIconPath.isEmpty ? nil : customIconPath
+            customIconPath: customIconPath.isEmpty ? nil : customIconPath,
+            catalogAppNames: catalogStore.allApplications.map(\.name),
+            catalogSourceDescription: catalogStore.sourceDescription
         )
     }
     
@@ -522,5 +556,6 @@ struct ContentView_Previews: PreviewProvider {
         ContentView()
             .environmentObject(DeploymentManager())
             .environmentObject(NetworkMonitor())
+            .environmentObject(CatalogStore())
     }
 }
